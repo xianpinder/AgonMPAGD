@@ -1,0 +1,3 @@
+cd /mpagd
+load game.bin
+run
