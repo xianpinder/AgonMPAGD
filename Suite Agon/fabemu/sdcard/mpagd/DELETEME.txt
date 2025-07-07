@@ -1,0 +1,1 @@
+This file can be deleted. It is here because git doesn't include empty directories.
