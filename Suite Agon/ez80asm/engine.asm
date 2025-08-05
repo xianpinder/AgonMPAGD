@@ -2567,11 +2567,6 @@ ink_colour:		db		0
 
 setpaper:
 				and		15
-				;ld		hl,colconv
-				;ld		de,0
-				;ld		e,a
-				;add		hl,de
-				;ld		a,(hl)
 				or		128
 				ld		(@vdu_colour+1),a
 				ld		hl,@vdu_colour
@@ -2584,11 +2579,25 @@ setpaper:
 setborder:
 				ret
 
-cheat_mode:		db		0
-
 setcolour:
+				push	af					; save colour value for later
+				rrca
+				rrca
+				rrca						; A = paper with bright bit
+				ld		b,a
+				push	bc
+				call	setpaper			; set the paper colour
+				pop		bc
+				ld		a,b
+				and		8
+				ld		b,a					; B = bright bit
+				pop		af
+				and		7					; A = bottom 3 bits for ink
+				or		b					; A = ink with bright bit
+				call	setink
 				ret
 
+cheat_mode:		db		0
 
 ; Re-define control key. A = key number to define
 definekey:
