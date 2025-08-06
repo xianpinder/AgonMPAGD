@@ -2496,14 +2496,14 @@ evis0:          call    evnt09          	; perform event.
 
 ; Clear the play area window.
 clw:
-				ld		a,(ink_colour)
+				ld		a,(paper_colour)
 				ld		(@clw_colour),a
 
 				ld		de,@clw_tx
 				ld		bc,0
-    			ld		a,(wintop)
+    			ld		a,(winlft)
 				call	@setcoord				
-				ld		a,(winlft)
+				ld		a,(wintop)
 				call	@setcoord
 				dec		bc
 				inc		de
@@ -2567,6 +2567,7 @@ ink_colour:		db		0
 
 setpaper:
 				and		15
+				ld		(paper_colour),a
 				or		128
 				ld		(@vdu_colour+1),a
 				ld		hl,@vdu_colour
@@ -2575,6 +2576,7 @@ setpaper:
 				ret
 
 @vdu_colour:	db		17,0
+paper_colour:	db		0
 
 setborder:
 				ret
