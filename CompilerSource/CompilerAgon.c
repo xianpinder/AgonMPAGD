@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <stdarg.h>
 
 /* Definitions. */
 
@@ -54,6 +55,9 @@ enum
 #define IDIFF					( SPR_TYP - PAM1ST )		/* diff between type and first sprite param. */
 #define ASMLABEL_DUMMY			1366
 
+// Sound fx filename constants
+#define MAX_SOUND_FILES			(32)
+#define DEF_SOUND_FILES			(7)
 
 /* Here's the vocabulary. */
 
@@ -254,6 +258,7 @@ enum
 	CMP_DEFINEFONT,
 	CMP_DEFINEJUMP,
 	CMP_DEFINECONTROLS,
+	CMP_DEFSOUND,
 
 	CON_LEFT,
 	CON_RIGHT,
@@ -342,7 +347,6 @@ enum
 /****************************************************************************************************************/
 
 void StartEvent( unsigned short int nEvent );
-void BuildFile( void );
 void EndEvent( void );
 void EndDummyEvent( void );
 void CreateMessages( void );
@@ -718,6 +722,7 @@ const char *keywrd =
 	"DEFINEFONT."		// define font.
 	"DEFINEJUMP."		// define jump table.
 	"DEFINECONTROLS."	// define key table.
+	"DEFSOUND."			// define sound effect.
 
 	/* Constants. */
 	"LEFT."				// left constant (keys).
@@ -884,6 +889,20 @@ const unsigned char cKeyOrder[ 11 ] =
 	3,2,1,0,4,5,6,7,8,9,10
 };
 
+
+const char *szDefaultSound[DEF_SOUND_FILES] =
+{
+	"jump.raw",
+	"explosion.raw",
+	"shoot.raw",
+	"pickup.raw",
+	"event.raw",
+	"laser.raw",
+	"jet.raw"
+};
+
+char szSoundFile[MAX_SOUND_FILES][256];
+
 /* Variables. */
 
 unsigned long int nErrors = 0;
@@ -917,7 +936,7 @@ unsigned short int nLastCondition;							/* IF or WHILE. */
 unsigned short int nOpType;									/* operation type, eg add or subtract. */
 unsigned short int nIncDec = 0;								/* non-zero when only inc or dec needed. */
 unsigned short int nNextLabel;								/* label to write. */
-short int nEvent;									/* event number passed to compiler */
+short int nEvent;											/* event number passed to compiler */
 unsigned short int nAnswerWantedHere;						/* where to put the result of add, sub, mul or div. */
 char cSingleEvent;											/* whether we're building one event or rebuilding the lot. */
 char cConstant;												/* non-zero when dealing with a constant. */
@@ -926,6 +945,7 @@ unsigned short int nMessageNumber = 0;						/* number of text messages in the ga
 unsigned short int nScreen = 0;								/* number of screens. */
 unsigned short int nPositions = 0;							/* number of sprite positions. */
 unsigned short int nObjects = 0;							/* number of objects. */
+unsigned short int nCustomSamples = 0;						/* number of custom sound samples */
 unsigned short int nParticle = 0;							/* non-zero when user has written custom routine. */
 unsigned short int nReadingControls = 0;					/* Non-zero when reading controls in a WHILE loop. */
 unsigned char cData = 0;									/* non-zero when we've encountered a data statement. */
@@ -945,7 +965,7 @@ short int nUseHopTable = 0;									/* use jump table when non-zero. */
 short int nDig = 0;											/* append dig code when non-zero. */
 
 FILE *pObject;												/* output file. */
-//FILE *pEngine;												/* engine source file. */
+//FILE *pEngine;											/* engine source file. */
 FILE *pDebug;												/* debugger source file. */
 FILE *pWorkMsg;												/* message work file. */
 FILE *pWorkBlk;												/* block work file. */
@@ -955,623 +975,7 @@ FILE *pWorkNme;												/* sprite position work file. */
 FILE *pWorkObj;												/* objects work file. */
 
 /* Functions */
-int main( int argc, const char* argv[] )
-{
-	//short int nChr = 0;
-	//short int nTmp;
-	int nArgs;
-	FILE *pSource;
-	char szDebugFilename[ 13 ] = { "debugzx.asm" };
-	//const char *szEngineFilename = "engineagon.asm";
-	char szSourceFilename[ 128 ];
-	char szObjectFilename[ 128 ];
-	char szWorkFile1Name[ 128 ];
-	char szWorkFile2Name[ 128 ];
-	char szWorkFile3Name[ 128 ];
-	char szWorkFile4Name[ 128 ];
-	char szWorkFile5Name[ 128 ];
-	char szWorkFile6Name[ 128 ];
-	char cTemp;
-	char* cChar;
 
-	cChar = &cTemp;
-
-	puts( "AGD Compiler for Agon version 0.7.10" );
-	puts( "(C) Jonathan Cauldwell May 2020" );
-	puts( "AgonLight/Console8 port v0.1 by Christian Pinder" );
-
-	if ( argc >= 2 && argc <= 6 )
-	{
-		cSingleEvent = 0;
-		nEvent = -1;
-		nMessageNumber = 0;
-	}
-	else
-	{
-		fputs( "Usage: Compiler ProjectName\n-a\tAdventure mode\n-y\tEnable AY sound effects\neg: CompilerAgon TEST", stderr );
-		// invalid number of command line arguments
-		exit ( 1 );
-	}
-
-	nArgs = argc - 2;
-	while ( nArgs-- > 0 )
-	{
-		if ( argv[ nArgs + 2 ][ 0 ] == '-' || argv[ nArgs + 2 ][ 0 ] == '/' )
-		{
-			switch( argv[ nArgs + 2 ][ 1 ] )
-			{
-				case 'a':
-				case 'A':
-					nAdventure = 1;
-					break;
-				case 'y':
-				case 'Y':
-					nAY = 1;
-					break;
-				default:
-					fputs( "Unrecognised switch", stderr );
-					exit ( 1 );
-					break;
-			}
-		}
-	}
-
-	/* Open target files. */
-	sprintf( szObjectFilename, "%s.asm", argv[ 1 ] );
-	pObject = fopen( szObjectFilename, "wb" );
-
-	if ( !pObject )
-	{
-        fprintf( stderr, "Unable to create target file: %s\n", szObjectFilename );
-		exit ( 1 );
-	}
-
-	sprintf( szWorkFile1Name, "%s.txt", argv[ 1 ] );
-	pWorkMsg = fopen( szWorkFile1Name, "wb" );
-	if ( !pWorkMsg )
-	{
-       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile1Name );
-		exit ( 1 );
-	}
-
-	sprintf( szWorkFile2Name, "%s.blk", argv[ 1 ] );
-	pWorkBlk = fopen( szWorkFile2Name, "wb" );
-	if ( !pWorkBlk )
-	{
-       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile2Name );
-		exit ( 1 );
-	}
-
-	sprintf( szWorkFile3Name, "%s.spr", argv[ 1 ] );
-	pWorkSpr = fopen( szWorkFile3Name, "wb" );
-	if ( !pWorkSpr )
-	{
-       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile3Name );
-		exit ( 1 );
-	}
-
-	sprintf( szWorkFile4Name, "%s.scl", argv[ 1 ] );
-	pWorkScr = fopen( szWorkFile4Name, "wb" );
-	if ( !pWorkScr )
-	{
-       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile4Name );
-		exit ( 1 );
-	}
-
-	sprintf( szWorkFile5Name, "%s.nme", argv[ 1 ] );
-	pWorkNme = fopen( szWorkFile5Name, "wb" );
-	if ( !pWorkNme )
-	{
-       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile5Name );
-		exit ( 1 );
-	}
-
-	sprintf( szWorkFile6Name, "%s.ojt", argv[ 1 ] );
-	pWorkObj = fopen( szWorkFile6Name, "wb" );
-	if ( !pWorkObj )
-	{
-       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile6Name );
-		exit ( 1 );
-	}
-
-	fprintf( pObject, "       INCLUDE \"engine.asm\"\n\n" );
-
-	//fprintf( pObject, "\n       jp start\n" );
-	//fprintf( pObject, "\n\n" );
-
-	/* Find the engine. */
-	//pEngine = fopen( szEngineFilename, "r" );
-	//if ( !pEngine )
-	//{
-	//	fprintf(stderr, "Cannot find %s\n", szEngineFilename);
-	//	exit ( 1 );
-	//}
-
-	/* Allocate buffer for the target code. */
-	cObjt = ( unsigned char* )malloc( MAX_EVENT_SIZE );
-	cStart = cObjt;
-	if ( !cObjt )
-	{
-		fputs( "Out of memory\n", stderr );
-		exit ( 1 );
-	}
-
-	/* Process single file. */
-	sprintf( szSourceFilename, "%s.agd", argv[ 1 ] );
-	printf( "Sourcename: %s\n", szSourceFilename );
-
-	/* Open source file. */
-	pSource = fopen( szSourceFilename, "r" );
-	lSize = fread( cBuff, 1, lSize, pSource );
-
-	if ( pSource )
-	{
-		/* Establish its size. */
-		fseek( pSource, 0, SEEK_END );
-		lSize = ftell( pSource );
-		rewind( pSource );
-
-		/* Allocate buffer for the script source code. */
-		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-		if ( !cBuff )
-		{
-			fputs( "Out of memory\n", stderr );
-			exit ( 1 );
-		}
-
-		/* Read source file into the buffer. */
-		lSize = fread( cBuff, 1, lSize, pSource );
-
-		/* Compile our target */
-		cErrPos = cBufPos = cBuff;							/* start of buffer */
-		nLine = 1;											/* line number */
-
-		BuildFile();
-
-		/* Close source file and free up the memory. */
-		fclose( pSource );
-		free( cBuff );
-
-		/* user particle routine not defined, put a ret here. */
-		if ( nParticle == 0 )
-		{
-			WriteInstructionAndLabel( "ptcusr: ret" );
-		}
-
-		if ( cWindow == 0 )
-		{
-			fputs( "DEFINEWINDOW missing\n", stderr );
-			exit ( 1 );
-		}
-
-		fwrite( cStart, 1, nCurrent - nAddress, pObject );	/* write output to file. */
-	}
-
-	/* output textfile messages to assembly. */
-	fclose( pWorkMsg );
-	pWorkMsg = fopen( szWorkFile1Name, "rb" );
-	if ( !pWorkMsg )
-	{
-       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile1Name );
-		exit ( 1 );
-	}
-
-	/* Establish its size. */
-	fseek( pWorkMsg, 0, SEEK_END );
-	lSize = ftell( pWorkMsg );
-	rewind( pWorkMsg );
-
-	/* Allocate buffer for the work file text. */
-	cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-
-	if ( !cBuff )
-	{
-		fputs( "Out of memory\n", stderr );
-		exit ( 1 );
-	}
-
-	cBufPos = cBuff;										/* start of buffer */
-
-	/* Read text file into the buffer. */
-	lSize = fread( cBuff, 1, lSize, pWorkMsg );
-
-	CreateMessages();
-
-	fwrite( cStart, 1, nCurrent - nAddress, pObject );
-	free( cBuff );
-
-	/* Now process the screen layouts. */
-	fclose( pWorkScr );
-	pWorkScr = fopen( szWorkFile4Name, "rb" );
-	if ( !pWorkScr )
-	{
-       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile4Name );
-		exit ( 1 );
-	}
-
-	/* Establish its size. */
-	fseek( pWorkScr, 0, SEEK_END );
-	lSize = ftell( pWorkScr );
-	rewind( pWorkScr );
-
-	if ( lSize > 0 )
-	{
-		/* Allocate buffer for the work file text. */
-		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-
-		if ( !cBuff )
-		{
-			fputs( "Out of memory\n", stderr );
-			exit ( 1 );
-		}
-
-		cBufPos = cBuff;									/* start of buffer */
-
-		/* Read data file into the buffer. */
-		lSize = fread( cBuff, 1, lSize, pWorkScr );
-
-		CreateScreens();
-		fwrite( cStart, 1, nCurrent - nAddress, pObject );
-		free( cBuff );
-	}
-
-	/* Now process the blocks. */
-	fclose( pWorkBlk );
-	pWorkBlk = fopen( szWorkFile2Name, "rb" );
-	if ( !pWorkBlk )
-	{
-       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile2Name );
-		exit ( 1 );
-	}
-
-	/* Establish its size. */
-	fseek( pWorkBlk, 0, SEEK_END );
-	lSize = ftell( pWorkBlk );
-	rewind( pWorkBlk );
-
-	if ( lSize > 0 )
-	{
-		/* Allocate buffer for the work file text. */
-		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-
-		if ( !cBuff )
-		{
-			fputs( "Out of memory\n", stderr );
-			exit ( 1 );
-		}
-
-		cBufPos = cBuff;									/* start of buffer */
-
-		/* Read data file into the buffer. */
-		lSize = fread( cBuff, 1, lSize, pWorkBlk );
-
-		CreateBlocks();
-		fwrite( cStart, 1, nCurrent - nAddress, pObject );
-		free( cBuff );
-	}
-
-	/* Now process the sprites. */
-	fclose( pWorkSpr );
-	pWorkSpr = fopen( szWorkFile3Name, "rb" );
-	if ( !pWorkSpr )
-	{
-       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile3Name );
-		exit ( 1 );
-	}
-
-	/* Establish its size. */
-	fseek( pWorkSpr, 0, SEEK_END );
-	lSize = ftell( pWorkSpr );
-	rewind( pWorkSpr );
-
-	if ( lSize > 0 )
-	{
-		/* Allocate buffer for the work file text. */
-		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-
-		if ( !cBuff )
-		{
-			fputs( "Out of memory\n", stderr );
-			exit ( 1 );
-		}
-
-		cBufPos = cBuff;									/* start of buffer */
-
-		/* Read data file into the buffer. */
-		lSize = fread( cBuff, 1, lSize, pWorkSpr );
-
-		CreateSprites();
-		fwrite( cStart, 1, nCurrent - nAddress, pObject );
-		free( cBuff );
-	}
-
-	/* Now process the sprite positions. */
-	fclose( pWorkNme );
-	pWorkNme = fopen( szWorkFile5Name, "rb" );
-	if ( !pWorkNme )
-	{
-       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile5Name );
-		exit ( 1 );
-	}
-
-	/* Establish its size. */
-	fseek( pWorkNme, 0, SEEK_END );
-	lSize = ftell( pWorkNme );
-	rewind( pWorkNme );
-
-	if ( lSize > 0 )
-	{
-		/* Allocate buffer for the work file text. */
-		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-
-		if ( !cBuff )
-		{
-			fputs( "Out of memory\n", stderr );
-			exit ( 1 );
-		}
-
-		cBufPos = cBuff;									/* start of buffer */
-
-		/* Read data file into the buffer. */
-		lSize = fread( cBuff, 1, lSize, pWorkNme );
-
-		CreatePositions();
-		fwrite( cStart, 1, nCurrent - nAddress, pObject );
-		free( cBuff );
-	}
-
-	/* generate assembly data for objects. */
-	fclose( pWorkObj );
-	pWorkObj = fopen( szWorkFile6Name, "rb" );
-	if ( !pWorkObj )
-	{
-       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile6Name );
-		exit ( 1 );
-	}
-
-	/* Establish its size. */
-	fseek( pWorkObj, 0, SEEK_END );
-	lSize = ftell( pWorkObj );
-	rewind( pWorkObj );
-
-	/* Allocate buffer for the work file text. */
-	cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
-
-	if ( !cBuff )
-	{
-		fputs( "Out of memory\n", stderr );
-		exit ( 1 );
-	}
-
-	cBufPos = cBuff;										/* start of buffer */
-
-	/* Read file into the buffer. */
-	lSize = fread( cBuff, 1, lSize, pWorkObj );
-
-	CreateObjects();
-	CreatePalette();
-	CreateFont();
-	CreateHopTable();
-	CreateKeyTable();
-	CreateDigCode();
-
-	fwrite( cStart, 1, nCurrent - nAddress, pObject );
-	free( cBuff );
-
-#if 0
-	/* Find the engine. */
-	pEngine = fopen( szEngineFilename, "r" );
-	if ( !pEngine )
-	{
-		fputs( "Cannot find enginezx.asm\n", stderr );
-		exit ( 1 );
-	}
-
-	/* Copy the engine to the target file. */
-	lSize = fread( cChar, 1, 1, pEngine );			/* read first character of engine source. */
-
-	fprintf( pObject, "\n\n" );
-
-	while ( lSize > 0 )
-	{
-		fwrite( cChar, 1, 1, pObject );				/* write code to output file. */
-		lSize = fread( cChar, 1, 1, pEngine );		/* read next byte of source. */
-	}
-#endif
-
-	fprintf( pObject, "\n\n" );
-	if ( nAY > 0 )
-	{
-		fprintf( pObject, "plsnd: call plsnd1\n" );
-		fprintf( pObject, "       call plsnd2\n" );
-		fprintf( pObject, "       call plsnd3\n" );
-		fprintf( pObject, "       jp w8912\n" );
-	}
-	else
-	{
-		fprintf( pObject, "plsnd: ret\n" );
-	}
-
-	//if ( nDebug == 0 )
-	//{
-	//	fprintf( pObject, "DEBUG  equ mloop\n" );
-	//}
-	//else
-	//{
-	//	fprintf( pObject, "DEBUG  equ dbloop\n" );
-	//}
-
-	if ( nAdventure > 0 )
-	{
-		fprintf( pObject, "wbloc:  ld hl,(pbptr)\n" );
-		fprintf( pObject, "        push af\n" );
-		fprintf( pObject, "        ld a,(scno)\n" );
-		fprintf( pObject, "        ld (hl),a\n" );
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        ld a,(dispx)\n");
-		fprintf( pObject, "        ld (hl),a\n" );
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        ld a,(dispy)\n");
-		fprintf( pObject, "        ld (hl),a\n" );
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        pop af\n" );
-		fprintf( pObject, "        ld (hl),a\n" );
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        ld (pbptr),hl\n" );
-		fprintf( pObject, "        ret\n" );
-
-		fprintf( pObject, "ibloc:  ld hl,eop\n" );
-		fprintf( pObject, "        ld (pbptr),hl\n" );
-		fprintf( pObject, "        jp initsc\n" );
-
-		fprintf( pObject, "rbloc:  ld hl,eop\n" );
-		fprintf( pObject, "rbloc2: ld bc,4\n" );
-		fprintf( pObject, "       ld de,(pbptr)\n" );
-		fprintf( pObject, "       and a\n" );
-		fprintf( pObject, "rbloc1: push hl\n" );
-		fprintf( pObject, "       sbc hl,de\n" );
-		fprintf( pObject, "       pop hl\n" );
-		fprintf( pObject, "       ret nc\n" );
-		fprintf( pObject, "       ld a,(scno)\n" );
-		fprintf( pObject, "       cp (hl)\n" );
-		fprintf( pObject, "       jr z,rbloc0\n" );
-		fprintf( pObject, "       add hl,bc\n" );
-		fprintf( pObject, "        jr rbloc1\n" );
-		fprintf( pObject, "rbloc0: inc hl\n" );
-		fprintf( pObject, "        ld a,(hl)\n" );
-		fprintf( pObject, "        ld (dispx),a\n");
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        ld a,(hl)\n" );
-		fprintf( pObject, "        ld (dispy),a\n" );
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        ld a,(hl)\n" );
-		fprintf( pObject, "        inc hl\n" );
-		fprintf( pObject, "        push hl\n" );
-		fprintf( pObject, "        call pattr\n" );
-		fprintf( pObject, "        pop hl\n" );
-		fprintf( pObject, "        jr rbloc2\n" );
-		fprintf( pObject, "pbptr:  dl eop\n" );
-	}
-	else
-	{
-		fprintf( pObject, "ibloc:  jp initsc\n");
-		fprintf( pObject, "rbloc:  ret\n");
-	}
-
-	fprintf( pObject, "eop:\n");
-
-	/* Close target file and free up the memory. */
-	fclose( pObject );
-	free( cStart );
-
-	/* Delete workfiles. */
-	fclose( pWorkMsg );
-	fclose( pWorkBlk );
-	fclose( pWorkSpr );
-	fclose( pWorkScr );
-	fclose( pWorkNme );
-	fclose( pWorkObj );
-	remove( szWorkFile1Name );
-	remove( szWorkFile2Name );
-	remove( szWorkFile3Name );
-	remove( szWorkFile4Name );
-	remove( szWorkFile5Name );
-	remove( szWorkFile6Name );
-
-	printf( "Output: %s\n", szObjectFilename );
-
-	return ( nErrors );
-}
-
-/* Sets up the label at the start of each event. */
-void StartEvent( unsigned short int nEvent )
-{
-	unsigned short int nCount;
-	char cLine[ 14 ];
-	char *cChar = cLine;
-
-	*cChar = 0;
-
-	/* reset compilation address. */
-	nCurrent = nAddress;
-	nOpType = 0;
-//	nRepeatAddress = ASMLABEL_DUMMY;
-	nNextLabel = 0;
-	nNumRepts = 0;
-	for ( nCount = 0; nCount < NUM_REPEAT_LEVELS; nCount++ )
-	{
-		nReptBuff[ nCount ] = ASMLABEL_DUMMY;
-	}
-
-	cObjt = cStart + ( nCurrent - nAddress );
-	if ( nEvent < 99 )
-	{
-		sprintf( cLine, "\nevnt%02d:", nEvent );		/* don't write label for dummy event. */
-	}
-
-	while ( *cChar )
-	{
-		*cObjt = *cChar++;
-		cObjt++;
-		nCurrent++;
-	}
-
-	/* Reset the IF address stack. */
-	nNumIfs = 0;
-	nIfSet = 0;
-	nNumWhiles = 0;
-	nGravity = 0;
-	ResetIf();
-
-	/* Reset number of DATA statement elements. */
-	//fprintf(stderr, "nEvent = %d\n", nEvent);
-	//assert (nEvent < 21);
-	if (nEvent < NUM_EVENTS)
-		nList[ nEvent ] = 0;
-	cData = 0;
-	cDataRequired = 0;
-
-	for ( nCount = 0; nCount < NUM_NESTING_LEVELS; nCount++ )
-	{
-		nIfBuff[ nCount ][ 0 ] = 0;
-		nIfBuff[ nCount ][ 1 ] = 0;
-		nWhileBuff[ nCount ][ 0 ] = 0;
-		nWhileBuff[ nCount ][ 1 ] = 0;
-		nWhileBuff[ nCount ][ 2 ] = 0;
-	}
-}
-
-/* Build our object file */
-void BuildFile( void )
-{
-//	unsigned short int nCount;
-	unsigned short int nKeyword;
-
-//	for ( nCount = 0; nCount < NUM_NESTING_LEVELS; nCount++ )
-//	{
-//		nIfBuff[ nCount ][ 0 ] = 0;
-//		nIfBuff[ nCount ][ 1 ] = 0;
-//		nWhileBuff[ nCount ][ 0 ] = 0;
-//		nWhileBuff[ nCount ][ 1 ] = 0;
-//		nWhileBuff[ nCount ][ 2 ] = 0;
-//	}
-
-	do
-	{
-		nKeyword = NextKeyword();
-		if ( nKeyword < FINAL_INSTRUCTION &&
-			 nKeyword > 0 )
-		{
-			Compile( nKeyword );
-		}
-	}
-	while ( cBufPos < ( cBuff + lSize ) );
-
-	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
-	{
-		EndEvent();											/* always put a ret at the end. */
-	}
-}
 
 void EndEvent( void )
 {
@@ -2306,30 +1710,20 @@ void CreatePalette()
 	WriteText("\nendpalett:\n");
 }
 
-void CreateFont( void )
+void CreateFont (void)
 {
-	short int nChar = 0;
-	short int nByte;
-
-	if ( nUseFont > 0 )
+	WriteText( "\nfont:" );
+	for (int nChar = 0; nChar < 96; nChar++)
 	{
-		WriteText( "\nfont:" );
-		for ( nChar = 0; nChar < 96; nChar++ )
+		WriteInstruction( "db " );
+		for (int nByte = 0; nByte < 8; nByte++ )
 		{
-			WriteInstruction( "db " );
-			for ( nByte = 0; nByte < 8; nByte++ )
+			WriteNumber( cDefaultFont[ nChar * 8 + nByte ] );
+			if ( nByte < 7 )
 			{
-				WriteNumber( cDefaultFont[ nChar * 8 + nByte ] );
-				if ( nByte < 7 )
-				{
-					WriteText( "," );
-				}
+				WriteText( "," );
 			}
 		}
-	}
-	else
-	{
-		WriteText( "\nfont:   equ 15616" );
 	}
 }
 
@@ -2701,460 +2095,38 @@ unsigned short int GetNum( short int nBits )
 	return ( nNum );
 }
 
-
-/* Parsed an instruction, this routine deals with it. */
-
-void Compile( unsigned short int nInstruction )
+int GetString (char *strptr)
 {
-	switch( nInstruction )
+	unsigned char *cSrc = cBufPos;
+
+	while (*cSrc == ' ' || *cSrc == '\t')
+		cSrc++;
+
+	if (*cSrc != '"')
 	{
-		case INS_IF:
-			CR_If();
-			break;
-		case INS_WHILE:
-			CR_While();
-			break;
-		case INS_SPRITEUP:
-			CR_SpriteUp();
-			break;
-		case INS_SPRITEDOWN:
-			CR_SpriteDown();
-			break;
-		case INS_SPRITELEFT:
-			CR_SpriteLeft();
-			break;
-		case INS_SPRITERIGHT:
-			CR_SpriteRight();
-			break;
-		case INS_ENDIF:
-			CR_EndIf();
-			break;
-		case INS_ENDWHILE:
-			CR_EndWhile();
-			break;
-		case INS_CANGOUP:
-			CR_CanGoUp();
-			break;
-		case INS_CANGODOWN:
-			CR_CanGoDown();
-			break;
-		case INS_CANGOLEFT:
-			CR_CanGoLeft();
-			break;
-		case INS_CANGORIGHT:
-			CR_CanGoRight();
-			break;
-		case INS_LADDERABOVE:
-			CR_LadderAbove();
-			break;
-		case INS_LADDERBELOW:
-			CR_LadderBelow();
-			break;
-		case INS_DEADLY:
-			CR_Deadly();
-			break;
-		case INS_CUSTOM:
-			CR_Custom();
-			break;
-		case INS_TO:
-		case INS_FROM:
-			CR_To();
-			break;
-		case INS_BY:
-			CR_By();
-			break;
-		case INS_NUM:
-			CR_Arg();
-			break;
-		case OPE_EQU:
-		case OPE_GRT:
-		case OPE_GRTEQU:
-		case OPE_NOT:
-		case OPE_LESEQU:
-		case OPE_LES:
-			CR_Operator( nInstruction );
-			break;
-		case INS_LET:
-			ResetIf();
-			break;
-		case INS_ELSE:
-			CR_Else();
-			break;
-		case VAR_EDGET:
-		case VAR_EDGEB:
-		case VAR_EDGEL:
-		case VAR_EDGER:
-		case VAR_SCREEN:
-		case VAR_LIV:
-		case VAR_A:
-		case VAR_B:
-		case VAR_C:
-		case VAR_D:
-		case VAR_E:
-		case VAR_F:
-		case VAR_G:
-		case VAR_H:
-		case VAR_I:
-		case VAR_J:
-		case VAR_K:
-		case VAR_L:
-		case VAR_M:
-		case VAR_N:
-		case VAR_O:
-		case VAR_P:
-		case VAR_Q:
-		case VAR_R:
-		case VAR_S:
-		case VAR_T:
-		case VAR_U:
-		case VAR_V:
-		case VAR_W:
-		case VAR_Z:
-		case VAR_CONTROL:
-		case VAR_LINE:
-		case VAR_COLUMN:
-		case VAR_CLOCK:
-		case VAR_RND:
-		case VAR_OBJ:
-		case VAR_OPT:
-		case VAR_BLOCK:
-		case SPR_TYP:
-		case SPR_IMG:
-		case SPR_FRM:
-		case SPR_X:
-		case SPR_Y:
-		case SPR_DIR:
-		case SPR_PMA:
-		case SPR_PMB:
-		case SPR_AIRBORNE:
-		case SPR_SPEED:
-			CR_Pam( nInstruction );
-			break;
-		case INS_GOT:
-			CR_Got();
-			break;
-		case INS_KEY:
-			CR_Key();
-			break;
-		case INS_DEFINEKEY:
-			CR_DefineKey();
-			break;
-		case INS_COLLISION:
-			CR_Collision();
-			break;
-		case INS_ANIM:
-			CR_Anim();
-			break;
-		case INS_ANIMBACK:
-			CR_AnimBack();
-			break;
-		case INS_PUTBLOCK:
-			CR_PutBlock();
-			break;
-		case INS_DIG:
-			CR_Dig();
-			break;
-		case INS_NEXTLEVEL:
-			CR_NextLevel();
-			break;
-		case INS_RESTART:
-			CR_Restart();
-			break;
-		case INS_SPAWN:
-			CR_Spawn();
-			break;
-		case INS_REMOVE:
-			CR_Remove();
-			break;
-		case INS_GETRANDOM:
-			CR_GetRandom();
-			break;
-		case INS_RANDOMIZE:
-			CR_Randomize();
-			break;
-		case INS_DISPLAYHIGH:
-			CR_DisplayHighScore();
-			break;
-		case INS_DISPLAYSCORE:
-			CR_DisplayScore();
-			break;
-		case INS_DISPLAYBONUS:
-			CR_DisplayBonus();
-			break;
-		case INS_SCORE:
-			CR_Score();
-			break;
-		case INS_BONUS:
-			CR_Bonus();
-			break;
-		case INS_ADDBONUS:
-			CR_AddBonus();
-			break;
-		case INS_ZEROBONUS:
-			CR_ZeroBonus();
-			break;
-		case INS_SOUND:
-			CR_Sound();
-			break;
-		case INS_BEEP:
-			CR_Beep();
-			break;
-		case INS_CRASH:
-			CR_Crash();
-			break;
-		case INS_CLS:
-			CR_ClS();
-			break;
-		case INS_BORDER:
-			CR_Border();
-			break;
-		case INS_COLOUR:
-			CR_Colour();
-			break;
-		case INS_PAPER:
-			CR_Paper();
-			break;
-		case INS_INK:
-			CR_Ink();
-			break;
-		case INS_CLUT:
-			CR_Clut();
-			break;
-		case INS_DELAY:
-			CR_Delay();
-			break;
-		case INS_PRINTMODE:
-			CR_PrintMode();
-			break;
-		case INS_PRINT:
-			CR_Print();
-			break;
-		case INS_AT:
-			CR_At();
-			break;
-		case INS_CHR:
-			CR_Chr();
-			break;
-		case INS_MENU:
-			CR_Menu();
-			break;
-		case INS_INVENTORY:
-			CR_Inventory();
-			break;
-		case INS_KILL:
-			CR_Kill();
-			break;
-		case INS_ADD:
-			nOpType = 129;									/* code for ADD A,C (needed by CR_To). */
-			CR_AddSubtract();
-			break;
-		case INS_SUB:
-			nOpType = 145;									/* code for SUB C (needed by CR_To). */
-			CR_AddSubtract();
-			break;
-		case INS_DISPLAY:
-			CR_Display();
-			break;
-		case INS_SCREENUP:
-			CR_ScreenUp();
-			break;
-		case INS_SCREENDOWN:
-			CR_ScreenDown();
-			break;
-		case INS_SCREENLEFT:
-			CR_ScreenLeft();
-			break;
-		case INS_SCREENRIGHT:
-			CR_ScreenRight();
-			break;
-		case INS_WAITKEY:
-			CR_WaitKey();
-			break;
-		case INS_JUMP:
-			CR_Jump();
-			break;
-		case INS_FALL:
-			CR_Fall();
-			break;
-		case INS_TABLEJUMP:
-			CR_TableJump();
-			break;
-		case INS_TABLEFALL:
-			CR_TableFall();
-			break;
-		case INS_OTHER:
-			CR_Other();
-			break;
-		case INS_SPAWNED:
-			CR_Spawned();
-			break;
-		case INS_ORIGINAL:
-			CR_Original();
-			break;
-		case INS_ENDGAME:
-			CR_EndGame();
-			break;
-		case INS_GET:
-			CR_Get();
-			break;
-		case INS_PUT:
-			CR_Put();
-			break;
-		case INS_REMOVEOBJ:
-			CR_RemoveObject();
-			break;
-		case INS_DETECTOBJ:
-			CR_DetectObject();
-			break;
-		case INS_ASM:
-			CR_Asm();
-			break;
-		case INS_EXIT:
-			CR_Exit();
-			break;
-		case INS_REPEAT:
-			CR_Repeat();
-			break;
-		case INS_ENDREPEAT:
-			CR_EndRepeat();
-			break;
-		case INS_MULTIPLY:
-			CR_Multiply();
-			break;
-		case INS_DIVIDE:
-			CR_Divide();
-			break;
-		case INS_SPRITEINK:
-			CR_SpriteInk();
-			break;
-		case INS_TRAIL:
-			CR_Trail();
-			break;
-		case INS_LASER:
-			CR_Laser();
-			break;
-		case INS_STAR:
-			CR_Star();
-			break;
-		case INS_EXPLODE:
-			CR_Explode();
-			break;
-		case INS_REDRAW:
-			CR_Redraw();
-			break;
-		case INS_SILENCE:
-			CR_Silence();
-			break;
-		case INS_CLW:
-			CR_ClW();
-			break;
-		case INS_PALETTE:
-			CR_Palette();
-			break;
-		case INS_GETBLOCK:
-			CR_GetBlock();
-			break;
-		case INS_PLOT:
-			CR_Plot();
-			break;
-		case INS_UNDOSPRITEMOVE:
-			CR_UndoSpriteMove();
-			break;
-		case INS_READ:
-			CR_Read();
-			break;
-		case INS_DATA:
-			CR_Data();
-			break;
-		case INS_RESTORE:
-			CR_Restore();
-			break;
-		case INS_TICKER:
-			CR_Ticker();
-			break;
-		case INS_USER:
-			CR_User();
-			break;
-		case INS_DEFINEPARTICLE:
-			CR_DefineParticle();
-			break;
-		case INS_PARTICLEUP:
-			CR_ParticleUp();
-			break;
-		case INS_PARTICLEDOWN:
-			CR_ParticleDown();
-			break;
-		case INS_PARTICLELEFT:
-			CR_ParticleLeft();
-			break;
-		case INS_PARTICLERIGHT:
-			CR_ParticleRight();
-			break;
-		case INS_DECAYPARTICLE:
-			CR_ParticleTimer();
-			break;
-		case INS_NEWPARTICLE:
-			CR_StartParticle();
-			break;
-		case INS_MESSAGE:
-			CR_Message();
-			break;
-		case INS_STOPFALL:
-			CR_StopFall();
-			break;
-		case INS_GETBLOCKS:
-			CR_GetBlocks();
-			break;
-		case INS_MACHINE:
-			CR_ValidateMachine();
-			break;
-		case INS_CALL:
-			CR_Call();
-			break;
-		case CMP_EVENT:
-			CR_Event();
-			break;
-		case CMP_DEFINEBLOCK:
-			CR_DefineBlock();
-			break;
-		case CMP_DEFINEWINDOW:
-			CR_DefineWindow();
-			break;
-		case CMP_DEFINESPRITE:
-			CR_DefineSprite();
-			break;
-		case CMP_DEFINESCREEN:
-			CR_DefineScreen();
-			break;
-		case CMP_SPRITEPOSITION:
-			CR_SpritePosition();
-			break;
-		case CMP_DEFINEOBJECT:
-			CR_DefineObject();
-			break;
-		case CMP_MAP:
-			CR_Map();
-			break;
-		case CMP_DEFINEPALETTE:
-			CR_DefinePalette();
-			break;
-		case CMP_DEFINEMESSAGES:
-			CR_DefineMessages();
-			break;
-		case CMP_DEFINEFONT:
-			CR_DefineFont();
-			break;
-		case CMP_DEFINEJUMP:
-			CR_DefineJump();
-			break;
-		case CMP_DEFINECONTROLS:
-			CR_DefineControls();
-			break;
-		default:
-			printf( "Instruction %d not handled\n", nInstruction );
-			break;
+		*strptr = (char)0;
+		cBufPos = cSrc;
+		return 0;
 	}
+
+	cSrc++;		// skip opening quote
+	while (*cSrc != '"' && *cSrc != LF && *cSrc != CR)
+		*strptr++ = *cSrc++;
+
+	*strptr = (char)0;
+
+	if (*cSrc == '"')
+	{
+		cSrc++;			// skip closing quote
+		cBufPos = cSrc;
+		return 1;
+	}
+
+	Error ("Missing close quote in string");
+	cBufPos = cSrc;
+	return 0;
 }
+
 
 void ResetIf( void )
 {
@@ -4111,7 +3083,8 @@ void CR_Print( void )
 void CR_PrintMode( void )
 {
 	CompileArgument();
-	WriteInstruction( "ld (prtmod),a" );					/* set print mode. */
+	//WriteInstruction( "ld (prtmod),a" );					/* set print mode. */
+	WriteInstruction( "call setprintmode" );				/* set print mode. */
 }
 
 void CR_At( void )
@@ -4419,8 +3392,8 @@ void CR_Divide( void )
 void CR_SpriteInk( void )
 {
 	CompileArgument();
-	WriteInstruction( "and 7" );
-	WriteInstruction( "ld c,a" );
+	//WriteInstruction( "and 7" );
+	//WriteInstruction( "ld c,a" );
 	WriteInstruction( "call cspr" );
 }
 
@@ -4811,17 +3784,20 @@ void CR_Ticker( void )
 		nArg1 = GetNum( 8 );								/* store first argument. */
 		if ( nArg1 == 0 )
 		{
-			WriteInstruction( "ld hl,scrly" );
-			WriteInstruction( "ld (hl),201" );
+			WriteInstruction( "ld b,0" );
+			WriteInstruction( "call iscrly" );
 		}
 		else
 		{
 			nArg2 = NextKeyword();							/* get second argument. */
 			if ( nArg2 == INS_STR )							/* second argument should be a string. */
 			{
-				nArg2 = 256 * nArg1 + nMessageNumber++;
-				WriteInstruction( "ld bc," );
-				WriteNumber( nArg2 );						/* pass both parameters as 16-bit argument. */
+				//nArg2 = 256 * nArg1 + nMessageNumber++;
+				nArg2 = nMessageNumber++;
+				WriteInstruction( "ld b," );
+				WriteNumber( nArg1 );
+				WriteInstruction( "ld c," );
+				WriteNumber( nArg2 );
 				WriteInstruction( "call iscrly" );
 			}
 			else
@@ -4829,9 +3805,12 @@ void CR_Ticker( void )
 				if ( nArg2 == INS_NUM )						/* if not a string, must be a message number. */
 				{
 //					nArg2 = 256 * GetNum( 8 ) + nArg1;
-					nArg2 = 256 * nArg1 + GetNum( 8 );
-					WriteInstruction( "ld bc," );
-					WriteNumber( nArg2 );					/* pass both parameters as 16-bit argument. */
+					//nArg2 = 256 * nArg1 + GetNum( 8 );
+					nArg2 = GetNum(8);
+					WriteInstruction( "ld b," );
+					WriteNumber( nArg1 );
+					WriteInstruction( "ld c," );
+					WriteNumber( nArg2 );
 					WriteInstruction( "call iscrly" );
 				}
 				else
@@ -5392,6 +4371,50 @@ void CR_DefineJump( void )
 	cDefaultHop[ 24 ] = 99;
 }
 
+void CR_DefSound (void)
+{
+	char szSampleName[256];
+
+	//unsigned char *cSrc = cBufPos;
+	int nArg;
+
+	nArg = NextKeyword();
+	if (nArg != INS_NUM)
+	{
+		Error ("DEFSOUND missing sound type number");
+		return;
+	}
+
+	int soundType = GetNum(8);
+	if (soundType != 0)
+	{
+		Error ("DEFSOUND unknown sound type number");
+		return;
+	}
+
+	int rv = GetString(&szSampleName);
+	if (rv == 0)
+	{
+		Error ("DEFSOUND 0 string expected");
+		return;
+	}
+
+	if (nCustomSamples == 0)
+	{
+		for (int i = 0; i < MAX_SOUND_FILES; i++)
+			szSoundFile[i][0] = (char)0;
+	}
+
+	if (nCustomSamples >= MAX_SOUND_FILES)
+	{
+		Error ("DEFSOUND too many sound files defined");
+		return;
+	}
+	strcpy (szSoundFile[nCustomSamples], szSampleName);
+	nCustomSamples++;
+}
+
+
 void CR_DefineControls( void )
 {
 	unsigned char *cSrc;									/* source pointer. */
@@ -5916,6 +4939,17 @@ void WriteText( const char *cChar )
 	}
 }
 
+void WriteTextf (const char *fmt, ...)
+{
+	char txt[1024];
+
+	va_list ap;
+	va_start (ap, fmt);
+	vsprintf (txt, fmt, ap);
+	va_end (ap);
+	WriteText (txt);
+}
+
 void WriteInstruction( const char *cCommand )
 {
 	NewLine();
@@ -6030,4 +5064,1125 @@ void Error( const char *cMsg )
 
 	fprintf( stderr, "\n" );
 	nErrors++;
+}
+
+void CreateSounds(void)
+{
+/*
+sound0_start:		db		23, 0, $85, -1, 5, 0
+					dl		sound0_end - sound0_data
+sound0_data:
+					incbin	"sounds\walk.raw"
+sound0_end:
+*/
+	int numSounds = 0;
+
+	WriteText ("\n");
+	for (int nSound = 0; nSound < MAX_SOUND_FILES; nSound++)
+	{
+		if (szSoundFile[nSound][0] == (char)0)
+			break;
+
+		WriteTextf ("\nsample%d_start:\n", nSound);
+		WriteTextf ("\tdb\t23, 0, $85, %d, 5, 0\n", -(nSound + 1));
+		WriteTextf ("\tdl\tsample%d_end - sample%d_data\n", nSound, nSound);
+		WriteTextf ("sample%d_data:\n", nSound);
+		WriteTextf ("\tincbin\t\"sounds\\%s\"\n",szSoundFile[nSound]);
+		WriteTextf ("sample%d_end:\n", nSound);
+		numSounds++;
+	}
+
+	WriteTextf ("\nnum_samples:\tdb\t%d\n", numSounds);
+	WriteTextf ("\nsample_table:\n");
+
+	if (numSounds == 0)
+	{
+		WriteTextf ("\tdl\t0,0\n");
+	}
+	else
+	{
+		for (int nSound = 0; nSound < numSounds; nSound++)
+		{
+			WriteTextf ("\tdl\tsample%d_start, sample%d_end - sample%d_start\n", nSound, nSound, nSound);
+		}
+	}
+
+}
+
+/* Parsed an instruction, this routine deals with it. */
+
+void Compile( unsigned short int nInstruction )
+{
+	switch( nInstruction )
+	{
+		case INS_IF:
+			CR_If();
+			break;
+		case INS_WHILE:
+			CR_While();
+			break;
+		case INS_SPRITEUP:
+			CR_SpriteUp();
+			break;
+		case INS_SPRITEDOWN:
+			CR_SpriteDown();
+			break;
+		case INS_SPRITELEFT:
+			CR_SpriteLeft();
+			break;
+		case INS_SPRITERIGHT:
+			CR_SpriteRight();
+			break;
+		case INS_ENDIF:
+			CR_EndIf();
+			break;
+		case INS_ENDWHILE:
+			CR_EndWhile();
+			break;
+		case INS_CANGOUP:
+			CR_CanGoUp();
+			break;
+		case INS_CANGODOWN:
+			CR_CanGoDown();
+			break;
+		case INS_CANGOLEFT:
+			CR_CanGoLeft();
+			break;
+		case INS_CANGORIGHT:
+			CR_CanGoRight();
+			break;
+		case INS_LADDERABOVE:
+			CR_LadderAbove();
+			break;
+		case INS_LADDERBELOW:
+			CR_LadderBelow();
+			break;
+		case INS_DEADLY:
+			CR_Deadly();
+			break;
+		case INS_CUSTOM:
+			CR_Custom();
+			break;
+		case INS_TO:
+		case INS_FROM:
+			CR_To();
+			break;
+		case INS_BY:
+			CR_By();
+			break;
+		case INS_NUM:
+			CR_Arg();
+			break;
+		case OPE_EQU:
+		case OPE_GRT:
+		case OPE_GRTEQU:
+		case OPE_NOT:
+		case OPE_LESEQU:
+		case OPE_LES:
+			CR_Operator( nInstruction );
+			break;
+		case INS_LET:
+			ResetIf();
+			break;
+		case INS_ELSE:
+			CR_Else();
+			break;
+		case VAR_EDGET:
+		case VAR_EDGEB:
+		case VAR_EDGEL:
+		case VAR_EDGER:
+		case VAR_SCREEN:
+		case VAR_LIV:
+		case VAR_A:
+		case VAR_B:
+		case VAR_C:
+		case VAR_D:
+		case VAR_E:
+		case VAR_F:
+		case VAR_G:
+		case VAR_H:
+		case VAR_I:
+		case VAR_J:
+		case VAR_K:
+		case VAR_L:
+		case VAR_M:
+		case VAR_N:
+		case VAR_O:
+		case VAR_P:
+		case VAR_Q:
+		case VAR_R:
+		case VAR_S:
+		case VAR_T:
+		case VAR_U:
+		case VAR_V:
+		case VAR_W:
+		case VAR_Z:
+		case VAR_CONTROL:
+		case VAR_LINE:
+		case VAR_COLUMN:
+		case VAR_CLOCK:
+		case VAR_RND:
+		case VAR_OBJ:
+		case VAR_OPT:
+		case VAR_BLOCK:
+		case SPR_TYP:
+		case SPR_IMG:
+		case SPR_FRM:
+		case SPR_X:
+		case SPR_Y:
+		case SPR_DIR:
+		case SPR_PMA:
+		case SPR_PMB:
+		case SPR_AIRBORNE:
+		case SPR_SPEED:
+			CR_Pam( nInstruction );
+			break;
+		case INS_GOT:
+			CR_Got();
+			break;
+		case INS_KEY:
+			CR_Key();
+			break;
+		case INS_DEFINEKEY:
+			CR_DefineKey();
+			break;
+		case INS_COLLISION:
+			CR_Collision();
+			break;
+		case INS_ANIM:
+			CR_Anim();
+			break;
+		case INS_ANIMBACK:
+			CR_AnimBack();
+			break;
+		case INS_PUTBLOCK:
+			CR_PutBlock();
+			break;
+		case INS_DIG:
+			CR_Dig();
+			break;
+		case INS_NEXTLEVEL:
+			CR_NextLevel();
+			break;
+		case INS_RESTART:
+			CR_Restart();
+			break;
+		case INS_SPAWN:
+			CR_Spawn();
+			break;
+		case INS_REMOVE:
+			CR_Remove();
+			break;
+		case INS_GETRANDOM:
+			CR_GetRandom();
+			break;
+		case INS_RANDOMIZE:
+			CR_Randomize();
+			break;
+		case INS_DISPLAYHIGH:
+			CR_DisplayHighScore();
+			break;
+		case INS_DISPLAYSCORE:
+			CR_DisplayScore();
+			break;
+		case INS_DISPLAYBONUS:
+			CR_DisplayBonus();
+			break;
+		case INS_SCORE:
+			CR_Score();
+			break;
+		case INS_BONUS:
+			CR_Bonus();
+			break;
+		case INS_ADDBONUS:
+			CR_AddBonus();
+			break;
+		case INS_ZEROBONUS:
+			CR_ZeroBonus();
+			break;
+		case INS_SOUND:
+			CR_Sound();
+			break;
+		case INS_BEEP:
+			CR_Beep();
+			break;
+		case INS_CRASH:
+			CR_Crash();
+			break;
+		case INS_CLS:
+			CR_ClS();
+			break;
+		case INS_BORDER:
+			CR_Border();
+			break;
+		case INS_COLOUR:
+			CR_Colour();
+			break;
+		case INS_PAPER:
+			CR_Paper();
+			break;
+		case INS_INK:
+			CR_Ink();
+			break;
+		case INS_CLUT:
+			CR_Clut();
+			break;
+		case INS_DELAY:
+			CR_Delay();
+			break;
+		case INS_PRINTMODE:
+			CR_PrintMode();
+			break;
+		case INS_PRINT:
+			CR_Print();
+			break;
+		case INS_AT:
+			CR_At();
+			break;
+		case INS_CHR:
+			CR_Chr();
+			break;
+		case INS_MENU:
+			CR_Menu();
+			break;
+		case INS_INVENTORY:
+			CR_Inventory();
+			break;
+		case INS_KILL:
+			CR_Kill();
+			break;
+		case INS_ADD:
+			nOpType = 129;									/* code for ADD A,C (needed by CR_To). */
+			CR_AddSubtract();
+			break;
+		case INS_SUB:
+			nOpType = 145;									/* code for SUB C (needed by CR_To). */
+			CR_AddSubtract();
+			break;
+		case INS_DISPLAY:
+			CR_Display();
+			break;
+		case INS_SCREENUP:
+			CR_ScreenUp();
+			break;
+		case INS_SCREENDOWN:
+			CR_ScreenDown();
+			break;
+		case INS_SCREENLEFT:
+			CR_ScreenLeft();
+			break;
+		case INS_SCREENRIGHT:
+			CR_ScreenRight();
+			break;
+		case INS_WAITKEY:
+			CR_WaitKey();
+			break;
+		case INS_JUMP:
+			CR_Jump();
+			break;
+		case INS_FALL:
+			CR_Fall();
+			break;
+		case INS_TABLEJUMP:
+			CR_TableJump();
+			break;
+		case INS_TABLEFALL:
+			CR_TableFall();
+			break;
+		case INS_OTHER:
+			CR_Other();
+			break;
+		case INS_SPAWNED:
+			CR_Spawned();
+			break;
+		case INS_ORIGINAL:
+			CR_Original();
+			break;
+		case INS_ENDGAME:
+			CR_EndGame();
+			break;
+		case INS_GET:
+			CR_Get();
+			break;
+		case INS_PUT:
+			CR_Put();
+			break;
+		case INS_REMOVEOBJ:
+			CR_RemoveObject();
+			break;
+		case INS_DETECTOBJ:
+			CR_DetectObject();
+			break;
+		case INS_ASM:
+			CR_Asm();
+			break;
+		case INS_EXIT:
+			CR_Exit();
+			break;
+		case INS_REPEAT:
+			CR_Repeat();
+			break;
+		case INS_ENDREPEAT:
+			CR_EndRepeat();
+			break;
+		case INS_MULTIPLY:
+			CR_Multiply();
+			break;
+		case INS_DIVIDE:
+			CR_Divide();
+			break;
+		case INS_SPRITEINK:
+			CR_SpriteInk();
+			break;
+		case INS_TRAIL:
+			CR_Trail();
+			break;
+		case INS_LASER:
+			CR_Laser();
+			break;
+		case INS_STAR:
+			CR_Star();
+			break;
+		case INS_EXPLODE:
+			CR_Explode();
+			break;
+		case INS_REDRAW:
+			CR_Redraw();
+			break;
+		case INS_SILENCE:
+			CR_Silence();
+			break;
+		case INS_CLW:
+			CR_ClW();
+			break;
+		case INS_PALETTE:
+			CR_Palette();
+			break;
+		case INS_GETBLOCK:
+			CR_GetBlock();
+			break;
+		case INS_PLOT:
+			CR_Plot();
+			break;
+		case INS_UNDOSPRITEMOVE:
+			CR_UndoSpriteMove();
+			break;
+		case INS_READ:
+			CR_Read();
+			break;
+		case INS_DATA:
+			CR_Data();
+			break;
+		case INS_RESTORE:
+			CR_Restore();
+			break;
+		case INS_TICKER:
+			CR_Ticker();
+			break;
+		case INS_USER:
+			CR_User();
+			break;
+		case INS_DEFINEPARTICLE:
+			CR_DefineParticle();
+			break;
+		case INS_PARTICLEUP:
+			CR_ParticleUp();
+			break;
+		case INS_PARTICLEDOWN:
+			CR_ParticleDown();
+			break;
+		case INS_PARTICLELEFT:
+			CR_ParticleLeft();
+			break;
+		case INS_PARTICLERIGHT:
+			CR_ParticleRight();
+			break;
+		case INS_DECAYPARTICLE:
+			CR_ParticleTimer();
+			break;
+		case INS_NEWPARTICLE:
+			CR_StartParticle();
+			break;
+		case INS_MESSAGE:
+			CR_Message();
+			break;
+		case INS_STOPFALL:
+			CR_StopFall();
+			break;
+		case INS_GETBLOCKS:
+			CR_GetBlocks();
+			break;
+		case INS_MACHINE:
+			CR_ValidateMachine();
+			break;
+		case INS_CALL:
+			CR_Call();
+			break;
+		case CMP_EVENT:
+			CR_Event();
+			break;
+		case CMP_DEFINEBLOCK:
+			CR_DefineBlock();
+			break;
+		case CMP_DEFINEWINDOW:
+			CR_DefineWindow();
+			break;
+		case CMP_DEFINESPRITE:
+			CR_DefineSprite();
+			break;
+		case CMP_DEFINESCREEN:
+			CR_DefineScreen();
+			break;
+		case CMP_SPRITEPOSITION:
+			CR_SpritePosition();
+			break;
+		case CMP_DEFINEOBJECT:
+			CR_DefineObject();
+			break;
+		case CMP_MAP:
+			CR_Map();
+			break;
+		case CMP_DEFINEPALETTE:
+			CR_DefinePalette();
+			break;
+		case CMP_DEFINEMESSAGES:
+			CR_DefineMessages();
+			break;
+		case CMP_DEFINEFONT:
+			CR_DefineFont();
+			break;
+		case CMP_DEFINEJUMP:
+			CR_DefineJump();
+			break;
+		case CMP_DEFINECONTROLS:
+			CR_DefineControls();
+			break;
+		case CMP_DEFSOUND:
+			CR_DefSound();
+			break;
+		default:
+			printf( "Instruction %d not handled\n", nInstruction );
+			break;
+	}
+}
+
+/* Sets up the label at the start of each event. */
+void StartEvent( unsigned short int nEvent )
+{
+	unsigned short int nCount;
+	char cLine[ 14 ];
+	char *cChar = cLine;
+
+	*cChar = 0;
+
+	/* reset compilation address. */
+	nCurrent = nAddress;
+	nOpType = 0;
+//	nRepeatAddress = ASMLABEL_DUMMY;
+	nNextLabel = 0;
+	nNumRepts = 0;
+	for ( nCount = 0; nCount < NUM_REPEAT_LEVELS; nCount++ )
+	{
+		nReptBuff[ nCount ] = ASMLABEL_DUMMY;
+	}
+
+	cObjt = cStart + ( nCurrent - nAddress );
+	if ( nEvent < 99 )
+	{
+		sprintf( cLine, "\nevnt%02d:", nEvent );		/* don't write label for dummy event. */
+	}
+
+	while ( *cChar )
+	{
+		*cObjt = *cChar++;
+		cObjt++;
+		nCurrent++;
+	}
+
+	/* Reset the IF address stack. */
+	nNumIfs = 0;
+	nIfSet = 0;
+	nNumWhiles = 0;
+	nGravity = 0;
+	ResetIf();
+
+	/* Reset number of DATA statement elements. */
+	//fprintf(stderr, "nEvent = %d\n", nEvent);
+	//assert (nEvent < 21);
+	if (nEvent < NUM_EVENTS)
+		nList[ nEvent ] = 0;
+	cData = 0;
+	cDataRequired = 0;
+
+	for ( nCount = 0; nCount < NUM_NESTING_LEVELS; nCount++ )
+	{
+		nIfBuff[ nCount ][ 0 ] = 0;
+		nIfBuff[ nCount ][ 1 ] = 0;
+		nWhileBuff[ nCount ][ 0 ] = 0;
+		nWhileBuff[ nCount ][ 1 ] = 0;
+		nWhileBuff[ nCount ][ 2 ] = 0;
+	}
+}
+
+/* Build our object file */
+void BuildFile( void )
+{
+//	unsigned short int nCount;
+	unsigned short int nKeyword;
+
+//	for ( nCount = 0; nCount < NUM_NESTING_LEVELS; nCount++ )
+//	{
+//		nIfBuff[ nCount ][ 0 ] = 0;
+//		nIfBuff[ nCount ][ 1 ] = 0;
+//		nWhileBuff[ nCount ][ 0 ] = 0;
+//		nWhileBuff[ nCount ][ 1 ] = 0;
+//		nWhileBuff[ nCount ][ 2 ] = 0;
+//	}
+
+	do
+	{
+		nKeyword = NextKeyword();
+		if ( nKeyword < FINAL_INSTRUCTION &&
+			 nKeyword > 0 )
+		{
+			Compile( nKeyword );
+		}
+	}
+	while ( cBufPos < ( cBuff + lSize ) );
+
+	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
+	{
+		EndEvent();											/* always put a ret at the end. */
+	}
+}
+
+
+int main (int argc, const char* argv[])
+{
+	int nArgs;
+	FILE *pSource;
+	char szDebugFilename[ 13 ] = { "debugzx.asm" };
+	char szSourceFilename[ 128 ];
+	char szObjectFilename[ 128 ];
+	char szWorkFile1Name[ 128 ];
+	char szWorkFile2Name[ 128 ];
+	char szWorkFile3Name[ 128 ];
+	char szWorkFile4Name[ 128 ];
+	char szWorkFile5Name[ 128 ];
+	char szWorkFile6Name[ 128 ];
+	char cTemp;
+	char* cChar;
+
+	cChar = &cTemp;
+
+	puts( "AGD Compiler for Agon version 0.7.10" );
+	puts( "(C) Jonathan Cauldwell May 2020" );
+	puts( "AgonLight/Console8 port v0.4 by Christian Pinder" );
+
+	if ( argc >= 2 && argc <= 6 )
+	{
+		cSingleEvent = 0;
+		nEvent = -1;
+		nMessageNumber = 0;
+	}
+	else
+	{
+		fputs( "Usage: Compiler ProjectName\n-a\tAdventure mode\neg: CompilerAgon TEST", stderr );
+		// invalid number of command line arguments
+		exit ( 1 );
+	}
+
+	nArgs = argc - 2;
+	while ( nArgs-- > 0 )
+	{
+		if ( argv[ nArgs + 2 ][ 0 ] == '-' || argv[ nArgs + 2 ][ 0 ] == '/' )
+		{
+			switch( argv[ nArgs + 2 ][ 1 ] )
+			{
+				case 'a':
+				case 'A':
+					nAdventure = 1;
+					break;
+				default:
+					fputs( "Unrecognised switch", stderr );
+					exit ( 1 );
+					break;
+			}
+		}
+	}
+
+	// Blank all the sound fx filenames
+	for (int i = 0; i < MAX_SOUND_FILES; i++)
+		szSoundFile[i][0] = (char)0;
+
+	// Copy over the default sound fx filenames
+	for (int i = 0; i < DEF_SOUND_FILES; i++)
+		strcpy (szSoundFile[i], szDefaultSound[i]);
+
+	/* Open target files. */
+	sprintf( szObjectFilename, "%s.asm", argv[ 1 ] );
+	pObject = fopen( szObjectFilename, "wb" );
+
+	if ( !pObject )
+	{
+        fprintf( stderr, "Unable to create target file: %s\n", szObjectFilename );
+		exit ( 1 );
+	}
+
+	sprintf( szWorkFile1Name, "%s.txt", argv[ 1 ] );
+	pWorkMsg = fopen( szWorkFile1Name, "wb" );
+	if ( !pWorkMsg )
+	{
+       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile1Name );
+		exit ( 1 );
+	}
+
+	sprintf( szWorkFile2Name, "%s.blk", argv[ 1 ] );
+	pWorkBlk = fopen( szWorkFile2Name, "wb" );
+	if ( !pWorkBlk )
+	{
+       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile2Name );
+		exit ( 1 );
+	}
+
+	sprintf( szWorkFile3Name, "%s.spr", argv[ 1 ] );
+	pWorkSpr = fopen( szWorkFile3Name, "wb" );
+	if ( !pWorkSpr )
+	{
+       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile3Name );
+		exit ( 1 );
+	}
+
+	sprintf( szWorkFile4Name, "%s.scl", argv[ 1 ] );
+	pWorkScr = fopen( szWorkFile4Name, "wb" );
+	if ( !pWorkScr )
+	{
+       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile4Name );
+		exit ( 1 );
+	}
+
+	sprintf( szWorkFile5Name, "%s.nme", argv[ 1 ] );
+	pWorkNme = fopen( szWorkFile5Name, "wb" );
+	if ( !pWorkNme )
+	{
+       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile5Name );
+		exit ( 1 );
+	}
+
+	sprintf( szWorkFile6Name, "%s.ojt", argv[ 1 ] );
+	pWorkObj = fopen( szWorkFile6Name, "wb" );
+	if ( !pWorkObj )
+	{
+       	fprintf( stderr, "Unable to create work file: %s\n", szWorkFile6Name );
+		exit ( 1 );
+	}
+
+	fprintf( pObject, "       INCLUDE \"engine.asm\"\n\n" );
+
+	//fprintf( pObject, "\n       jp start\n" );
+	//fprintf( pObject, "\n\n" );
+
+	/* Find the engine. */
+	//pEngine = fopen( szEngineFilename, "r" );
+	//if ( !pEngine )
+	//{
+	//	fprintf(stderr, "Cannot find %s\n", szEngineFilename);
+	//	exit ( 1 );
+	//}
+
+	/* Allocate buffer for the target code. */
+	cObjt = ( unsigned char* )malloc( MAX_EVENT_SIZE );
+	cStart = cObjt;
+	if ( !cObjt )
+	{
+		fputs( "Out of memory\n", stderr );
+		exit ( 1 );
+	}
+
+	/* Process single file. */
+	sprintf( szSourceFilename, "%s.agd", argv[ 1 ] );
+	printf( "Sourcename: %s\n", szSourceFilename );
+
+	/* Open source file. */
+	pSource = fopen( szSourceFilename, "r" );
+	lSize = fread( cBuff, 1, lSize, pSource );
+
+	if ( pSource )
+	{
+		/* Establish its size. */
+		fseek( pSource, 0, SEEK_END );
+		lSize = ftell( pSource );
+		rewind( pSource );
+
+		/* Allocate buffer for the script source code. */
+		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+		if ( !cBuff )
+		{
+			fputs( "Out of memory\n", stderr );
+			exit ( 1 );
+		}
+
+		/* Read source file into the buffer. */
+		lSize = fread( cBuff, 1, lSize, pSource );
+
+		/* Compile our target */
+		cErrPos = cBufPos = cBuff;							/* start of buffer */
+		nLine = 1;											/* line number */
+
+		BuildFile();
+
+		/* Close source file and free up the memory. */
+		fclose( pSource );
+		free( cBuff );
+
+		/* user particle routine not defined, put a ret here. */
+		if ( nParticle == 0 )
+		{
+			WriteInstructionAndLabel( "ptcusr: ret" );
+		}
+
+		if ( cWindow == 0 )
+		{
+			fputs( "DEFINEWINDOW missing\n", stderr );
+			exit ( 1 );
+		}
+
+		fwrite( cStart, 1, nCurrent - nAddress, pObject );	/* write output to file. */
+	}
+
+	/* output textfile messages to assembly. */
+	fclose( pWorkMsg );
+	pWorkMsg = fopen( szWorkFile1Name, "rb" );
+	if ( !pWorkMsg )
+	{
+       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile1Name );
+		exit ( 1 );
+	}
+
+	/* Establish its size. */
+	fseek( pWorkMsg, 0, SEEK_END );
+	lSize = ftell( pWorkMsg );
+	rewind( pWorkMsg );
+
+	/* Allocate buffer for the work file text. */
+	cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+
+	if ( !cBuff )
+	{
+		fputs( "Out of memory\n", stderr );
+		exit ( 1 );
+	}
+
+	cBufPos = cBuff;										/* start of buffer */
+
+	/* Read text file into the buffer. */
+	lSize = fread( cBuff, 1, lSize, pWorkMsg );
+
+	CreateMessages();
+
+	fwrite( cStart, 1, nCurrent - nAddress, pObject );
+	free( cBuff );
+
+	/* Now process the screen layouts. */
+	fclose( pWorkScr );
+	pWorkScr = fopen( szWorkFile4Name, "rb" );
+	if ( !pWorkScr )
+	{
+       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile4Name );
+		exit ( 1 );
+	}
+
+	/* Establish its size. */
+	fseek( pWorkScr, 0, SEEK_END );
+	lSize = ftell( pWorkScr );
+	rewind( pWorkScr );
+
+	if ( lSize > 0 )
+	{
+		/* Allocate buffer for the work file text. */
+		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+
+		if ( !cBuff )
+		{
+			fputs( "Out of memory\n", stderr );
+			exit ( 1 );
+		}
+
+		cBufPos = cBuff;									/* start of buffer */
+
+		/* Read data file into the buffer. */
+		lSize = fread( cBuff, 1, lSize, pWorkScr );
+
+		CreateScreens();
+		fwrite( cStart, 1, nCurrent - nAddress, pObject );
+		free( cBuff );
+	}
+
+	/* Now process the blocks. */
+	fclose( pWorkBlk );
+	pWorkBlk = fopen( szWorkFile2Name, "rb" );
+	if ( !pWorkBlk )
+	{
+       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile2Name );
+		exit ( 1 );
+	}
+
+	/* Establish its size. */
+	fseek( pWorkBlk, 0, SEEK_END );
+	lSize = ftell( pWorkBlk );
+	rewind( pWorkBlk );
+
+	if ( lSize > 0 )
+	{
+		/* Allocate buffer for the work file text. */
+		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+
+		if ( !cBuff )
+		{
+			fputs( "Out of memory\n", stderr );
+			exit ( 1 );
+		}
+
+		cBufPos = cBuff;									/* start of buffer */
+
+		/* Read data file into the buffer. */
+		lSize = fread( cBuff, 1, lSize, pWorkBlk );
+
+		CreateBlocks();
+		fwrite( cStart, 1, nCurrent - nAddress, pObject );
+		free( cBuff );
+	}
+
+	/* Now process the sprites. */
+	fclose( pWorkSpr );
+	pWorkSpr = fopen( szWorkFile3Name, "rb" );
+	if ( !pWorkSpr )
+	{
+       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile3Name );
+		exit ( 1 );
+	}
+
+	/* Establish its size. */
+	fseek( pWorkSpr, 0, SEEK_END );
+	lSize = ftell( pWorkSpr );
+	rewind( pWorkSpr );
+
+	if ( lSize > 0 )
+	{
+		/* Allocate buffer for the work file text. */
+		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+
+		if ( !cBuff )
+		{
+			fputs( "Out of memory\n", stderr );
+			exit ( 1 );
+		}
+
+		cBufPos = cBuff;									/* start of buffer */
+
+		/* Read data file into the buffer. */
+		lSize = fread( cBuff, 1, lSize, pWorkSpr );
+
+		CreateSprites();
+		fwrite( cStart, 1, nCurrent - nAddress, pObject );
+		free( cBuff );
+	}
+
+	/* Now process the sprite positions. */
+	fclose( pWorkNme );
+	pWorkNme = fopen( szWorkFile5Name, "rb" );
+	if ( !pWorkNme )
+	{
+       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile5Name );
+		exit ( 1 );
+	}
+
+	/* Establish its size. */
+	fseek( pWorkNme, 0, SEEK_END );
+	lSize = ftell( pWorkNme );
+	rewind( pWorkNme );
+
+	if ( lSize > 0 )
+	{
+		/* Allocate buffer for the work file text. */
+		cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+
+		if ( !cBuff )
+		{
+			fputs( "Out of memory\n", stderr );
+			exit ( 1 );
+		}
+
+		cBufPos = cBuff;									/* start of buffer */
+
+		/* Read data file into the buffer. */
+		lSize = fread( cBuff, 1, lSize, pWorkNme );
+
+		CreatePositions();
+		fwrite( cStart, 1, nCurrent - nAddress, pObject );
+		free( cBuff );
+	}
+
+	/* generate assembly data for objects. */
+	fclose( pWorkObj );
+	pWorkObj = fopen( szWorkFile6Name, "rb" );
+	if ( !pWorkObj )
+	{
+       	fprintf( stderr, "Unable to read work file: %s\n", szWorkFile6Name );
+		exit ( 1 );
+	}
+
+	/* Establish its size. */
+	fseek( pWorkObj, 0, SEEK_END );
+	lSize = ftell( pWorkObj );
+	rewind( pWorkObj );
+
+	/* Allocate buffer for the work file text. */
+	cBuff = ( unsigned char* )malloc( sizeof( char )*lSize );
+
+	if ( !cBuff )
+	{
+		fputs( "Out of memory\n", stderr );
+		exit ( 1 );
+	}
+
+	cBufPos = cBuff;										/* start of buffer */
+
+	/* Read file into the buffer. */
+	lSize = fread( cBuff, 1, lSize, pWorkObj );
+
+	CreateObjects();
+	CreatePalette();
+	CreateFont();
+	CreateSounds();
+	CreateHopTable();
+	CreateKeyTable();
+	CreateDigCode();
+
+	fwrite( cStart, 1, nCurrent - nAddress, pObject );
+	free( cBuff );
+
+#if 0
+	/* Find the engine. */
+	pEngine = fopen( szEngineFilename, "r" );
+	if ( !pEngine )
+	{
+		fputs( "Cannot find enginezx.asm\n", stderr );
+		exit ( 1 );
+	}
+
+	/* Copy the engine to the target file. */
+	lSize = fread( cChar, 1, 1, pEngine );			/* read first character of engine source. */
+
+	fprintf( pObject, "\n\n" );
+
+	while ( lSize > 0 )
+	{
+		fwrite( cChar, 1, 1, pObject );				/* write code to output file. */
+		lSize = fread( cChar, 1, 1, pEngine );		/* read next byte of source. */
+	}
+#endif
+
+	fprintf( pObject, "\n\n" );
+	if ( nAY > 0 )
+	{
+		fprintf( pObject, "plsnd: call plsnd1\n" );
+		fprintf( pObject, "       call plsnd2\n" );
+		fprintf( pObject, "       call plsnd3\n" );
+		fprintf( pObject, "       jp w8912\n" );
+	}
+	else
+	{
+		fprintf( pObject, "plsnd: ret\n" );
+	}
+
+	//if ( nDebug == 0 )
+	//{
+	//	fprintf( pObject, "DEBUG  equ mloop\n" );
+	//}
+	//else
+	//{
+	//	fprintf( pObject, "DEBUG  equ dbloop\n" );
+	//}
+
+	if ( nAdventure > 0 )
+	{
+		fprintf( pObject, "wbloc:  ld hl,(pbptr)\n" );
+		fprintf( pObject, "        push af\n" );
+		fprintf( pObject, "        ld a,(scno)\n" );
+		fprintf( pObject, "        ld (hl),a\n" );
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        ld a,(dispx)\n");
+		fprintf( pObject, "        ld (hl),a\n" );
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        ld a,(dispy)\n");
+		fprintf( pObject, "        ld (hl),a\n" );
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        pop af\n" );
+		fprintf( pObject, "        ld (hl),a\n" );
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        ld (pbptr),hl\n" );
+		fprintf( pObject, "        ret\n" );
+
+		fprintf( pObject, "ibloc:  ld hl,eop\n" );
+		fprintf( pObject, "        ld (pbptr),hl\n" );
+		fprintf( pObject, "        jp initsc\n" );
+
+		fprintf( pObject, "rbloc:  ld hl,eop\n" );
+		fprintf( pObject, "rbloc2: ld bc,4\n" );
+		fprintf( pObject, "       ld de,(pbptr)\n" );
+		fprintf( pObject, "       and a\n" );
+		fprintf( pObject, "rbloc1: push hl\n" );
+		fprintf( pObject, "       sbc hl,de\n" );
+		fprintf( pObject, "       pop hl\n" );
+		fprintf( pObject, "       ret nc\n" );
+		fprintf( pObject, "       ld a,(scno)\n" );
+		fprintf( pObject, "       cp (hl)\n" );
+		fprintf( pObject, "       jr z,rbloc0\n" );
+		fprintf( pObject, "       add hl,bc\n" );
+		fprintf( pObject, "        jr rbloc1\n" );
+		fprintf( pObject, "rbloc0: inc hl\n" );
+		fprintf( pObject, "        ld a,(hl)\n" );
+		fprintf( pObject, "        ld (dispx),a\n");
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        ld a,(hl)\n" );
+		fprintf( pObject, "        ld (dispy),a\n" );
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        ld a,(hl)\n" );
+		fprintf( pObject, "        inc hl\n" );
+		fprintf( pObject, "        push hl\n" );
+		fprintf( pObject, "        call pattr\n" );
+		fprintf( pObject, "        pop hl\n" );
+		fprintf( pObject, "        jr rbloc2\n" );
+		fprintf( pObject, "pbptr:  dl eop\n" );
+	}
+	else
+	{
+		fprintf( pObject, "ibloc:  jp initsc\n");
+		fprintf( pObject, "rbloc:  ret\n");
+	}
+
+	fprintf( pObject, "eop:\n");
+
+	/* Close target file and free up the memory. */
+	fclose( pObject );
+	free( cStart );
+
+	/* Delete workfiles. */
+	fclose( pWorkMsg );
+	fclose( pWorkBlk );
+	fclose( pWorkSpr );
+	fclose( pWorkScr );
+	fclose( pWorkNme );
+	fclose( pWorkObj );
+	remove( szWorkFile1Name );
+	remove( szWorkFile2Name );
+	remove( szWorkFile3Name );
+	remove( szWorkFile4Name );
+	remove( szWorkFile5Name );
+	remove( szWorkFile6Name );
+
+	printf( "Output: %s\n", szObjectFilename );
+
+	return ( nErrors );
 }

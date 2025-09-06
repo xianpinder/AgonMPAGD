@@ -4,7 +4,7 @@
 ; (C) 2008 - 2020 Jonathan Cauldwell.
 ; ZX Spectrum Engine v0.7.10
 
-; AgonLight/Console8 port v0.1 by Christian Pinder.
+; AgonLight/Console8 port v0.4 by Christian Pinder.
 
 
                 ASSUME  ADL=1
@@ -76,6 +76,7 @@ start:
 				call	init_50hz_timer		; setup a 50HZ timer for controlling game speed
 
 				call	init_vdp			; setup screen mode and sound channels
+				call	load_samples		; upload the sound samples to the VDP
 				call	load_font			; load the custom font
 
 				ld		a,(numbl)
@@ -99,8 +100,6 @@ start:
 ; if you wish to exit to MOS at the end of each game, change "jp gamelp" to "jp game".
 				jp      gamelp       		; start the game.
 
-
-
 ; Modify for inventory.
 minve:
 				ld 		hl,invdis       	; routine address.
@@ -123,7 +122,8 @@ mmenu:
 
 ; Work out size of box for message or menu.
 
-dbox:			ld 		hl,msgdat   		; pointer to messages.
+dbox:
+				ld 		hl,msgdat   		; pointer to messages.
 				call 	getwrd         		; get message number.
 				push 	hl             		; store pointer to message.
 				ld 		d,1             	; height.
@@ -349,7 +349,7 @@ dbar:
 				ret
 
 ; VDU codes for drawing a solid coloured rectangle
-vdu_bar:		db		18,3,15				; gcol xor colour 15
+vdu_bar:		db		18,3,7				; gcol xor colour 7
 				db		25, 4	 			; MOVE x,y
 vdu_bar_x:		dw		0
 vdu_bar_y:		dw		0
@@ -463,7 +463,6 @@ iniob0:
 ; Screen synchronisation.
 vsync:
 				call	gfx_present			; send drawing commands to GPU
-@skipvdu:
   				call	joykey				; read joystick/keyboard.
 
 				ld		hl,clock
@@ -472,7 +471,13 @@ vsync:
 				cp		(hl)
 				jr		z, @wait			; wait for 50HZ clock to tick over 
 
-       			jp		proshr				; shrapnel and stuff.
+				ld		a,(hl)
+				rra                 		; rotate bit into carry.
+       			call 	c,vsync5       		; time to play sound and do shrapnel/ticker stuff.
+				ret
+
+vsync5:			;call plsnd          		; play sound.
+       			jp		proshr           	; shrapnel and stuff.
 
 
 ; Redraw the screen.
@@ -482,7 +487,7 @@ redraw:
 				call 	gfx_present
 				call 	droom          		; show screen layout.
 				call 	shwob          		; draw objects.
-numsp0:
+
 				ld 		b,NUMSPR         	; sprites to draw.
        			ld 		ix,sprtab        	; sprite table.
 redrw0:
@@ -501,6 +506,7 @@ redrw1:
 				djnz 	redrw0         		; repeat for remaining sprites.
 				call 	rbloc          		; redraw blocks if in adventure mode.
 				call 	dshrp          		; redraw shrapnel.
+				call 	gfx_present
 				pop 	ix              	; retrieve sprite pointer.
 				ret
 
@@ -537,7 +543,7 @@ fdchk:
 
 ; Colour a sprite.
 cspr:
-				ld		a,c					; A = new sprite colour
+				;ld		a,c					; A = new sprite colour
 				and		15					; limit it to 0..15 range
 				ld      (ix+19),a			; set new sprite colour
 				ret
@@ -545,75 +551,486 @@ cspr:
 
 ; Specialist routines.
 ; Process shrapnel.
-; TODO
 proshr:
-				ret
+				ld		ix,SHRAPN        	; table.
+       			ld		b,NUMSHR         	; shrapnel pieces to process.
+prosh0:
+				ld		a,(ix+0)         	; on/off marker.
+       			rla                 		; check its status.
+				call	nc,prosh1      		; on, so process it.
+       			lea		ix,ix+SHRSIZ        ; point there.
+       			djnz	prosh0         		; round again.
 
+       			jp		scrly
 
-; Explosion shrapnel.
-; TODO
-shrap:
-				ret
+; process a piece of shrapnel
+prosh1:
+				push	bc             		; store counter.
+       			call	plot           		; delete the pixel.
+       			call	prosh2         		; run the routine.
+       			call	chkxy          		; check x and y are good before we redisplay.
+       			pop		bc              	; restore counter.
+       			ret
+
+prosh2:
+       			ld		hl,shrptr        	; shrapnel routine pointers.
+				ld		d,(ix+0)
+				ld		e,3					; 3 bytes per address
+				mlt		de
+       			add		hl,de           	; point to address of routine.
+				ld		hl,(hl)				; HL = address of routine
+       			jp 		(hl)             	; jump to routine.
+
+shrptr:
+				dl		laser          		; laser.
+       			dl 		trail          		; vapour trail.
+       			dl 		shrap          		; shrapnel from explosion.
+       			dl 		dotl           		; horizontal starfield left.
+       			dl 		dotr           		; horizontal starfield right.
+       			dl 		dotu           		; vertical starfield up.
+       			dl 		dotd           		; vertical starfield down.
+       			dl 		ptcusr         		; user particle.
+
+kilshr:
+				ld		(ix+0),128       	; switch off shrapnel.
+       			ret
 
 ; Check coordinates are good before redrawing at new position.
-; TODO
 chkxy:
+				ld		hl,wntopx        	; window top.
+       			ld		a,(ix+3)         	; fetch shrapnel Y coordinate.
+       			cp		(hl)             	; compare with top window limit.
+       			jr		c,kilshr         	; out of window, kill shrapnel.
+       			inc		hl              	; left edge.
+       			ld		a,(ix+5)         	; fetch shrapnel X coordinate.
+       			cp		(hl)             	; compare with left window limit.
+       			jr		c,kilshr         	; out of window, kill shrapnel.
+
+       			inc		hl              	; point to bottom.
+       			ld		a,(hl)           	; fetch window limit.
+       			add		a,15            	; add height of sprite.
+       			cp		(ix+3)           	; compare with shrapnel x coordinate.
+       			jr		c,kilshr         	; off screen, kill shrapnel.
+       			inc		hl              	; point to right edge.
+       			ld		a,(hl)           	; fetch shrapnel y coordinate.
+       			add		a,15            	; add width of sprite.
+       			cp		(ix+5)           	; compare with window limit.
+       			jr		c,kilshr         	; off screen, kill shrapnel.
+				ld		a,250
+				cp		(ix+5)
+				jr		c,kilshr			; if X > 250 kill shrapnel (guard against overflow)
+
+; Drop through.
+
+; Display shrapnel.
+plot:
+       			ld 		a,(ix+0)         	; type.
+       			and 	a               	; is it a laser?
+       			jr 		z,plot_laser       	; yes, draw laser instead.
+
+				push	bc
+				push	de
+				or		a
+				sbc		hl,hl				; HL = 0
+				ld		l,(ix+5)
+				add		hl,hl				; HL = x * 2
+				ld		a,l
+				ld		(vdu_xorpx),a
+				ld		a,h
+				ld		(vdu_xorpx+1),a
+
+				ld		h,0
+				ld		l,(ix+3)
+				add		hl,hl				; HL = y * 2
+				ld		a,l
+				ld		(vdu_xorpy),a
+				ld		a,h
+				ld		(vdu_xorpy+1),a
+
+				ld		hl,vdu_xor_pixel
+				ld		bc,vdu_xor_pixel_end - vdu_xor_pixel
+				call	batchvdu
+				pop		de
+				pop		bc
+       			ret
+
+plot_laser:
+				push	bc
+				push	de
+				or		a
+				sbc		hl,hl				; HL = 0
+				ld		l,(ix+5)
+				add		hl,hl				; HL = x * 2
+				ld		a,l
+				ld		(vdu_laserx),a
+				ld		a,h
+				ld		(vdu_laserx+1),a
+
+				ld		h,0
+				ld		l,(ix+3)
+				add		hl,hl				; HL = y * 2
+				ld		a,l
+				ld		(vdu_lasery),a
+				ld		a,h
+				ld		(vdu_lasery+1),a
+
+				ld		hl,vdu_xor_laser
+				ld		bc,vdu_xor_laser_end - vdu_xor_laser
+				call	batchvdu
+				pop		de
+				pop		bc
 				ret
 
-; TODO
+vdu_xor_pixel:
+				db		18,3,7				; GCOL 3,7 (xor colour 7)
+				db		25, 69				; PLOT PIXEL
+vdu_xorpx:		dw		0					; x pos
+vdu_xorpy:		dw		0					; y pos
+vdu_xor_pixel_end:
+
+vdu_xor_laser:
+				db		18,3,7				; GCOL 3,7 (xor colour 7)
+				db		25, 4				; MOVE
+vdu_laserx:		dw		0					; x pos
+vdu_lasery:		dw		0					; y pos
+				db		25,1				; DRAW relative
+				dw		16,0				; (16,0)
+vdu_xor_laser_end:
+
+shrsin:
+				dw		0,1024,391,946,724,724,946,391
+       			dw		1024,0,946,65144,724,64811,391,64589
+       			dw		0,64512,65144,64589,64811,64811,64589,65144
+       			dw		64512,0,64589,391,64811,724,65144,946
+
+; Explosion shrapnel.
+
+shrap:
+				ld		de,0				; no high byte.
+				ld 		e,(ix+1)         	; get the angle.
+       			ld 		hl,shrsin        	; shrapnel sine table.
+       			add 	hl,de           	; point to sine.
+
+       			ld		e,(hl)           	; fetch value from table.
+       			inc		hl              	; next byte of table.
+       			ld		d,(hl)           	; fetch value from table.
+       			inc		hl              	; next byte of table.
+       			ld		c,(hl)           	; fetch value from table.
+       			inc		hl              	; next byte of table.
+       			ld		b,(hl)           	; fetch value from table.
+       			ld		l,(ix+2)         	; x coordinate in hl.
+       			ld		h,(ix+3)
+       			add		hl,de           	; add sine.
+       			ld		(ix+2),l         	; store new coordinate.
+       			ld		(ix+3),h
+       			ld		l,(ix+4)         	; y coordinate in hl.
+       			ld		h,(ix+5)
+       			add		hl,bc           	; add cosine.
+       			ld		(ix+4),l        	; store new coordinate.
+       			ld		(ix+5),h
+       			ret
+
+dotl:			dec 	(ix+5)          	; move left.
+       			ret
+dotr:   		inc 	(ix+5)          	; move left.
+       			ret
+dotu:   		dec 	(ix+3)          	; move up.
+       			ret
+dotd:   		inc 	(ix+3)          	; move down.
+       			ret
+
 trail:
-				ret
+				dec 	(ix+1)          	; time remaining.
+       			jp 		z,trailk         	; time to switch it off.
+       			call 	qrand          		; get a random number.
+       			rra                 		; x or y axis?
+       			jr 		c,trailv         	; use x.
+       			rra                 		; which direction?
+       			jr 		c,traill         	; go left.
+       			inc 	(ix+5)          	; go right.
+       			ret
+traill:			dec 	(ix+5)          	; go left.
+       			ret
+trailv:			rra                 		; which direction?
+       			jr 		c,trailu         	; go up.
+       			inc 	(ix+3)          	; go down.
+       			ret
+trailu:			dec 	(ix+3)          	; go up.
+       			ret
+trailk:			ld		(ix+3),200       	; set off-screen to kill vapour trail.
+       			ret
 
-; TODO
+
 laser:
-				ret
+				ld		a,(ix+1)         	; direction.
+       			rra                 		; left or right?
+       			jr		nc,laserl        	; move left.
+       			ld		b,8              	; distance to travel.
+       			jr		laserm           	; move laser.
+laserl:
+				ld		b,248            	; distance to travel.
+laserm:
+				ld		a,(ix+5)         	; x position.
+       			add		a,b             	; add distance.
+       			ld		(ix+5),a         	; set new x coordinate.
+
+; Test new block.
+
+       			ld		(dispy),a        	; set x for block collision detection purposes.
+       			ld 		a,(ix+3)         	; get y.
+       			ld 		(dispx),a        	; set coordinate for collision test.
+       			call 	tstbl          		; get block type there.
+       			cp 		WALL             	; is it solid?
+       			jr		z,trailk         	; yes, it cannot pass.
+       			cp		FODDER           	; is it fodder?
+       			ret		nz              	; no, ignore it.
+       			call	fdchk          		; remove fodder block.
+       			jr		trailk           	; destroy laser.
+
 
 ; Shoot a laser.
-; TODO
 shoot:
+				ld		c,a              	; store direction in c register.
+       			ld		a,(ix+8)         	; y coordinate.
+;shoot1:
+				add		a,7             	; down 7 pixels.
+       			ld		l,a              	; put y coordinate in l.
+       			ld		h,(ix+9)         	; x coordinate in h.
+       			push	ix             		; store pointer to sprite.
+       			call	fpslot         		; find particle slot.
+       			jr		nc,@done        	; failed, restore ix.
+       			ld		(ix+0),0         	; set up a laser.
+       			ld		(ix+1),c         	; set the direction.
+       			ld		(ix+3),l         	; set y coordinate.
+       			rr		c                	; check direction we want.
+       			jr		c,@shootr         	; shoot right.
+       			ld		a,h              	; x position.
+@shoot0:
+				and		248             	; align on character boundary.
+       			ld		(ix+5),a       		; set x coordinate.
+				call	chkxy          		; plot first position.
+@done:
+				pop		ix              	; restore sprite pointer.
 				ret
+@shootr:
+				ld		a,h              	; x position.
+       			add		a,15            	; look right.
+       			jr		@shoot0           	; align and continue.
 
 ; Create a bit of vapour trail.
 vapour:
+				push 	ix             		; store pointer to sprite.
+       			ld		a,(ix+8)         	; x coordinate.
+				add		a,7
+				ld		l,a
+       			ld		a,(ix+9)         	; y coordinate.
+				add		a,7
+				ld		h,a
+       			call	fpslot         		; find particle slot.
+       			jr		c,vapou1        	; no, we can use it.
+				pop		ix              	; restore sprite pointer.
+       			ret                 		; out of slots, can't generate anything.
+vapou1:
+				ld 		(ix+3),l         	; set up x.
+       			ld 		(ix+5),h         	; set up y coordinate.
+       			call 	qrand          		; get quick random number.
+       			and 	15              	; random time.
+       			add 	a,15            	; minimum time on screen.
+       			ld 		(ix+1),a         	; set time on screen.
+       			ld 		(ix+0),1         	; define particle as vapour trail.
+				call	chkxy          		; plot first position.
+				pop		ix              	; restore sprite pointer.
 				ret
 
 ; Create a user particle.
-; TODO
 ptusr:
-				ret
+				ld		c,a           		; store timer.
+       			ld		l,(ix+8)         	; x coordinate.
+       			ld		h,(ix+9)         	; y coordinate.
+       			ld		de,7*256+7       	; mid-point of sprite.
+       			add		hl,de           	; point to centre of sprite.
+       			call	fpslot         		; find particle slot.
+       			jr		c,ptusr1         	; no, we can use it.
+       			ret                 		; out of slots, can't generate anything.
+ptusr1:
+				ld 		(ix+3),l         	; set up x.
+       			ld 		(ix+5),h         	; set up y coordinate.
+       			ld		a,c           		; restore timer.
+       			ld		(ix+1),a         	; set time on screen.
+       			ld		(ix+0),7         	; define particle as user particle.
+       			jp		chkxy            	; plot first position.
 
 ; Create a vertical or horizontal star.
-TODO:
 star:
+				push	ix             		; store pointer to sprite.
+       			call	fpslot         		; find particle slot.
+       			jp		c,star7          	; found one we can use.
+star0: 			pop		ix              	; restore sprite pointer.
+       			ret                 		; out of slots, can't generate anything.
+
+star7:
+				ld 		a,c              	; direction.
+       			and 	3               	; is it left?
+       			jr 		z,star1          	; yes, it's horizontal.
+       			dec 	a               	; is it right?
+       			jr 		z,star2          	; yes, it's horizontal.
+       			dec 	a               	; is it up?
+       			jr 		z,star3          	; yes, it's vertical.
+
+       			ld 		a,(wntopx)       	; get edge of screen.
+       			inc 	a               	; down one pixel.
+star8:
+				ld 		(ix+3),a         	; set x coord.
+       			call	qrand          		; get quick random number.
+star9:
+				ld 		(ix+5),a         	; set y position.
+       			ld 		a,c              	; direction.
+       			and 	3               	; zero to three.
+       			add 	a,3             	; 3 to 6 for starfield.
+       			ld 		(ix+0),a         	; define particle as star.
+       			call	chkxy          		; plot first position.
+				pop		ix
 				ret
+star1:
+				call 	qrand          		; get quick random number.
+       			ld 		(ix+3),a         	; set x coord.
+       			ld 		a,(wnrgtx)       	; get edge of screen.
+       			add 	a,15            	; add width of sprite minus 1.
+       			jp 		star9
+star2:
+				call 	qrand          		; get quick random number.
+       			ld 		(ix+3),a         	; set x coord.
+       			ld 		a,(wnlftx)       	; get edge of screen.
+       			jp 		star9
+star3:
+				ld		a,(wnbotx)       	; get edge of screen.
+       			add		a,15            	; height of sprite minus one pixel.
+       			jp		star8
 
 ; Find particle slot for lasers or vapour trail.
-; Can't use alternate accumulator.
-; TODO
 fpslot:
-				ret
+				ld 		ix,SHRAPN        	; shrapnel table.
+       			ld 		b,NUMSHR         	; number of pieces in table.
+fpslt0:
+				ld 		a,(ix+0)         	; get type.
+       			rla                 		; is this slot in use?
+       			ret 	c               	; no, we can use it.
+       			lea 	ix,ix+SHRSIZ        ; point to more shrapnel.
+       			djnz 	fpslt0         		; repeat for all shrapnel.
+       			ret   
 
 ; Create an explosion at sprite position.
-; TODO
 explod:
-				ret
+				ld 		c,a              	; particles to create.
+       			push 	ix             		; store pointer to sprite.
+				ld 		l,(ix+3)         	; sprite x coordinate.
+				ld 		h,(ix+4)         	; sprite y coordinate.
+       			ld 		ix,SHRAPN        	; shrapnel table.
+       			ld 		b,NUMSHR         	; number of pieces in table.
+expld0:
+				ld 		a,(ix+0)         	; get type.
+       			rla                 		; is this slot in use?
+       			jr 		c,expld1         	; no, we can use it.
+expld2:
+				lea		ix,ix+SHRSIZ    	; point to more shrapnel.
+       			djnz	expld0         		; repeat for all shrapnel.
+
+				pop		ix              	; restore sprite pointer.
+       			ret                 		; out of slots, can't generate any more.
+expld1:
+				ld 		a,c              	; shrapnel counter.
+       			and 	15              	; 0 to 15.
+       			add 	a,l             	; add to x.
+				ld		(ix+2),0
+       			ld 		(ix+3),a         	; x coord.
+       			ld 		a,(seed3)        	; crap random number.
+       			and 	15              	; 0 to 15.
+       			add 	a,h             	; add to y.
+				ld		(ix+4),0
+       			ld 		(ix+5),a         	; y coord.
+       			ld 		(ix+0),2         	; switch it on.
+       			push 	hl                 	; store coordinates.
+       			call 	chkxy          		; plot first position.
+       			call 	qrand          		; quick random angle.
+       			and 	60              	; keep within range.
+       			ld 		(ix+1),a         	; angle.
+       			pop 	hl                 	; restore coordinates.
+       			dec 	c               	; one less piece of shrapnel to generate.
+       			jr 		nz,expld2        	; back to main explosion loop.
+				pop		ix              	; restore sprite pointer.
+       			ret                 		; created all shrapnel so exit
+
+; Quick random
+qrand:
+				push	bc
+				call	random
+				ld		hl,seed3
+				xor		(hl)
+				ld		(hl),a
+				pop		bc
+       			ret
+
+seed3:			db		0
 
 
 ; Display all shrapnel.
-; TODO
 dshrp:
-				ret
+				ld		ix,SHRAPN        	; table.
+       			ld		b,NUMSHR         	; shrapnel pieces to process.
+@loop:
+				ld		a,(ix+0)         	; on/off marker.
+       			rla                 		; check its status.
+				call	nc,plot      		; on, so plot it.
+       			lea		ix,ix+SHRSIZ        ; point there.
+       			djnz	@loop         		; round again.
+       			jp		scrly
+
 
 ; Particle engine.
-; TODO
 inishr:
-				ret
-
+				ld		hl,SHRAPN  			; table.
+       			ld		b,NUMSHR   			; shrapnel pieces to process.
+       			ld		de,SHRSIZ    		; distance to next.
+inish0:			ld		(hl),255    		; kill the shrapnel.
+       			add		hl,de      			; point there.
+       			djnz	inish0    			; round again.
+       			ret
 
 ; Check for collision between laser and sprite.
-; TODO
 lcol:
-				ret
+				ld		hl,SHRAPN        	; shrapnel table.
+       			ld		de,SHRSIZ        	; size of each particle.
+       			ld		b,NUMSHR         	; number of pieces in table.
+lcol0:
+				ld		a,(hl)           	; get type.
+       			and		a               	; is this slot a laser?
+       			jr		z,lcol1          	; yes, check collision.
+lcol3:
+				add		hl,de           	; point to more shrapnel.
+       			djnz	lcol0          		; repeat for all shrapnel.
+       			ret                 		; no collision, carry not set.
+lcol1:
+				push	hl             		; store pointer to laser.
+       			inc 	hl              	; direction.
+       			inc 	hl              	; not used.
+       			inc 	hl              	; x position.
+       			ld		a,(hl)           	; get x.
+       			sub		(ix+X)          	; subtract sprite x.
+lcolh:
+				cp		16               	; within range?
+       			jr		nc,lcol2         	; no, missed.
+       			inc		hl              	; not used.
+       			inc		hl              	; y position.
+       			ld		a,(hl)           	; get y.
+       			sub		(ix+Y)          	; subtract sprite y.
+       			cp		16               	; within range?
+       			jr		c,lcol4          	; yes, collision occurred.
+lcol2:
+				pop		hl              	; restore laser pointer from stack.
+       			jr		lcol3				; no collision, check any other lasers
+lcol4:
+				pop		hl              	; restore laser pointer.
+       			ret                 		; return with carry set for collision.
 
 
 ; Main game engine code starts here.
@@ -621,9 +1038,10 @@ gamelp:
                 call    game
                 jr      gamelp
 
-
 game:
 rpblc2:			call 	inishr				; initialise particle engine.
+				xor		a					; set width to zero
+				ld		(txtwid),a			; to disable ticker scrolling
 evintr:
 				call	batchoff
                 call	evnt12         		; call intro/menu event.
@@ -1093,9 +1511,9 @@ checkx:
 dscor:
 				call	preprt				; set up font and print position.
        			call	checkx				; make sure we're in a printable range.
-       			;ld 	a,(prtmod)   		; get print mode.
-       			;and	a           		; standard size text?
-       			;jp		nz,bscor0    		; no, show double-height.
+       			ld		a,(prtmod)   		; get print mode.
+       			and		a           		; standard size text?
+       			jp		nz,bscor0    		; no, show double-height.
 dscor0:
 				push	bc            		; place counter onto the stack.
 				push	hl
@@ -1114,6 +1532,17 @@ dscor2:
        			ld		(chary),a       	; set up display coordinates.
        			ret
 
+; Displays the current score in double-height characters.
+bscor0:
+				push	bc             		; place counter onto the stack.
+				push	hl
+				ld		a,(hl)           	; fetch character.
+				call	bchar          		; display big char.
+				pop		hl
+				inc		hl              	; next score column.
+				pop		bc              	; retrieve character counter.
+				djnz	bscor0         		; repeat for all digits.
+				jp		dscor2           	; tidy up line and column variables.
 
 ; Adds number in the hl pair to the score.
 addsc:
@@ -1272,10 +1701,6 @@ pchr:
 				ld		hl,dispy    		; X coordinate.
        			inc		(hl)            	; move along one.
        			ret
-
-;sprite:
-;                ret
-
 
 ; Get room address.
 groom:
@@ -1542,7 +1967,7 @@ gtblk:
 				ld 		(dispy),a       	; set display coordinates.
        			ld		a,(colpat)       	; get collectable block used on this screen.
 ; remove the block from the screen
-				call	draw_block
+				call	xor_block
        			ret
 
 ; Touched deadly block check.
@@ -1722,9 +2147,9 @@ dmsg:
 dmsg3:
 				call	preprt     			; pre-printing stuff.
 				call	checkx     			; make sure we're in a printable range.
-				;ld 	a,(prtmod)   		; print mode.
-				;and	a               	; standard size?
-				;jp 	nz,bmsg1      		; no, double-height text.
+				ld 		a,(prtmod)   		; print mode.
+				and		a               	; standard size?
+				jp 		nz,bmsg1      		; no, double-height text.
 dmsg0:
 				push	hl          		; store string pointer.
 				ld		a,(hl)     			; fetch byte to display.
@@ -1760,14 +2185,83 @@ dmsg5:
        			ld 		(chary),a       	; set up display coordinates.
        			ret
 
+
+; Display message in big text.
+bmsg1:
+				ld		a,(hl)				; get character to display.
+				push	hl					; store pointer to message.
+				and		127					; only want 7 bits.
+				cp		13					; newline character?
+				jr		z,bmsg2
+				call	bchar				; display big char.
+bmsg3:
+				pop		hl					; retrieve message pointer.
+				ld		a,(hl)				; look at last character.
+				inc		hl					; next character in list.
+				rla                 		; was terminator flag set?
+				jr		nc,bmsg1         	; no, keep going.
+				ret
+bmsg2:
+				ld		hl,charx         	; y coordinate.
+				inc		(hl)            	; newline.
+				inc		(hl)            	; newline.
+				ld		a,(hl)           	; fetch position.
+				cp		23               	; past bottom?
+				jr		c,bmsg3          	; no, it's okay.
+				ld		(hl),0           	; restart at top.
+				ld		hl,chary			; x coordinate
+				ld		(hl),0           	; carriage return.
+				jr		bmsg3
+
+
+; Big character display.
+bchar:
+				push	af
+				ld		bc,4
+				cp		127
+				jr		nz,@skip
+				inc		bc
+				ld		(@txt_char2),a
+				ld		a,27
+@skip:
+				ld		(@txt_char),a
+				ld		a,(dispx)
+				ld		(@txt_row),a
+				ld		a,(dispy)
+				ld		(@txt_col),a
+				ld		hl,@vdu_txt
+				call	batchvdu
+
+				pop		af
+				or		128
+				ld		(@txt_char),a
+				ld		hl,@txt_row
+				inc		(hl)
+				ld		bc,4
+				ld		hl,@vdu_txt
+				call	batchvdu
+
+				call	nexpos         		; display position.
+       			jp		nz,dscor2        	; not on a new line.
+				inc		(hl)            	; newline.
+				call	nexlin         		; next line check.
+				jp		dscor2           	; tidy up line and column variables.
+
+@vdu_txt:
+				db		31
+@txt_col:		db		0
+@txt_row:		db		0
+@txt_char:		db		0
+@txt_char2:		db		0
+
 ; Display a character.
 achar:
 				ld 		b,a          		; copy to b.
 				call 	preprt        		; get ready to print.
-				;ld 	a,(prtmod)       	; print mode.
-				;and 	a               	; standard size?
+				ld		a,(prtmod)       	; print mode.
+				and 	a               	; standard size?
 				ld 		a,b              	; character in accumulator.
-				;jp 	nz,bchar         	; no, double-height text.
+				jp		nz,bchar         	; no, double-height text.
 				call 	pchar          		; display character.
 				call 	nexpos         		; display position.
 				jp 		z,achar3         	; next line down.
@@ -1799,7 +2293,7 @@ nexlin:
 
 ; Pre-print preliminaries.
 preprt:
-;prescr:
+prescr:
 				ld		a,(charx)       	; display coordinates.
 				ld		(dispx),a       	; set up general coordinates.
 				ld		e,a
@@ -2410,23 +2904,24 @@ nspr2:
 
 ; Two initialisation routines.
 ; Initialise sprites - copy everything from list to table.
-ispr:           ld      b,NUMSPR        ; sprite slots in table.
-                ld      ix,sprtab       ; sprite table.
-ispr2:          ld      a,(hl)          ; fetch byte.
-                cp      255             ; is it an end marker?
-                ret     z               ; yes, no more to do.
-ispr1:          ld      a,(ix+0)        ; fetch sprite type.
-                cp      255             ; is it enabled yet?
-                jr      nz,ispr4        ; yes, try another slot.
-                ld      a,(ix+5)        ; next type.
-                cp      255             ; is it enabled yet?
-                jr      z,ispr3         ; no, process this one.
-ispr4:          ld      de,TABSIZ       ; distance to next odd/even entry.
-                add     ix,de           ; next sprite.
-                djnz    ispr1           ; repeat for remaining sprites.
-                ret                     ; no more room in table.
-ispr3:          call    cpsp            ; initialise a sprite.
-                djnz    ispr2           ; one less space in the table.
+ispr:
+           		ld      b,NUMSPR        	; sprite slots in table.
+                ld      ix,sprtab       	; sprite table.
+ispr2:          ld      a,(hl)          	; fetch byte.
+                cp      255             	; is it an end marker?
+                ret     z               	; yes, no more to do.
+ispr1:          ld      a,(ix+0)        	; fetch sprite type.
+                cp      255             	; is it enabled yet?
+                jr      nz,ispr4        	; yes, try another slot.
+                ld      a,(ix+5)        	; next type.
+                cp      255             	; is it enabled yet?
+                jr      z,ispr3         	; no, process this one.
+ispr4:          ld      de,TABSIZ      		; distance to next odd/even entry.
+                add     ix,de           	; next sprite.
+                djnz    ispr1          		; repeat for remaining sprites.
+                ret                     	; no more room in table.
+ispr3:          call    cpsp            	; initialise a sprite.
+                djnz    ispr2           	; one less space in the table.
                 ret
 
 
@@ -2508,19 +3003,19 @@ clw:
 				dec		bc
 				inc		de
 				inc		de
-				ld		a,(winwid)       ; width of window.
+				ld		a,(winwid)       	; width of window.
 				call	@setcoord				
-				ld		a,(winhgt)       ; height of window.
+				ld		a,(winhgt)       	; height of window.
 				call	@setcoord				
 
 				ld		hl,@vdu_clw
 				ld		bc,@vdu_clw_end - @vdu_clw
 				call	batchvdu
 
-				ld		a,(wintop)      ; get coordinates of window.
-				ld		(charx),a       ; put into display position.
-				ld		a,(winlft)      ; get coordinates of window.
-				ld		(chary),a       ; put into display position.
+				ld		a,(wintop)      	; get coordinates of window.
+				ld		(charx),a       	; put into display position.
+				ld		a,(winlft)      	; get coordinates of window.
+				ld		(chary),a       	; put into display position.
 				ret
 @setcoord:
 				ld		l,a
@@ -2535,23 +3030,184 @@ clw:
 				ex		de,hl
 				ret
 
-@vdu_clw:		db		18,0		; gcol paint
-@clw_colour:	db		0			; gcol colour
-				db		25, 4	 	; MOVE x,y
+@vdu_clw:		db		18,0				; gcol paint
+@clw_colour:	db		0					; gcol colour
+				db		25, 4	 			; MOVE x,y
 @clw_tx:		dw		0
 				dw		0
-				db		25,$61		; RECTANGLE relative co-ords
+				db		25,$61				; RECTANGLE relative co-ords
 				dw		0
 				dw		0
 @vdu_clw_end:
 
-; TODO
+
+txtwid:			db		16             		; width of ticker message.
+txtpos: 		dl		msgdat
+txtini:			dl		msgdat
+
 ; Effects code.
 ; Ticker routine is called 25 times per second.
 scrly:
+				ld		a,(txtwid)			; A = width of ticker
+				or		a
+				ret		z					; disabled if width is zero
+
+				ld		a,(scroll_offset)
+				inc		a
+				inc		a
+				ld		(scroll_offset),a
+				cp		18
+				jr		nz,@doscroll
+
+				ld		a,2
+				ld		(scroll_offset),a
+
+       			ld		hl,(txtpos)      	; get text pointer.
+       			ld		a,(hl)           	; find character we're displaying.
+       			and		127             	; remove end marker bit if applicable.
+       			cp		13               	; is it newline?
+       			jr		nz,@scrly5        	; no, it's okay.
+       			ld		a,32             	; convert to a space instead.
+@scrly5:
+				ld		(scroll_char),a
+
+       			ld		hl,(txtpos)      	; text pointer.
+       			ld		a,(hl)           	; what was the character?
+       			inc		hl              	; next character in message.
+       			rla                 		; end of message?
+       			jr		nc,@scrly6        	; not yet - continue.
+				ld		hl,(txtini)      	; start of scrolling message.
+@scrly6:		ld		(txtpos),hl      	; new text pointer position.
+
+@doscroll:
+				ld		a,(scroll_offset)
+				ld		bc,0
+				ld		c,a
+				ld		hl,(scroll_right)
+				or		a
+				sbc		hl,bc
+				ld		a,l
+				ld		(scroll_txt_x),a
+				ld		a,h
+				ld		(scroll_txt_x+1),a
+
+				ld		hl,vdu_scroll
+				ld		bc,vdu_scroll_end - vdu_scroll
+				call	batchvdu
+
 				ret
+
+
+scroll_offset:	db		0
+
+vdu_scroll:
+				db		5					; write text at graphics cursor
+				db		18,0,7				; white gfx forground
+				db		18,0,128			; black gfx background
+				db		17,128				; black text background (for scrolling)
+				db		23, 0, $95, 0		; Select font
+				dw		$B500				; buffer ID
+				db		0					; flags
+
+				db		24					; set graphics viewport
+scroll_view:	dw		0					; 0,1 left
+				dw		0					; 2,3 bottom
+scroll_right:	dw		0					; 4,5 right
+				dw		0					; 6,7 top
+				db		23, 7, 2, 1, 2		; scroll graphics viewport left 2 pixels
+
+				db		25,4				; move graphics cursor
+scroll_txt_x:	dw		0					; x position
+scroll_txt_y:	dw		0					; y position
+scroll_char:	db		0
+				db		4					; write text a text cursor
+				db		26					; reset graphics and text viewports
+vdu_scroll_end:
+
+; initialise the ticker scroller
+; B = width
+; C = message number
 iscrly:
+       			ld		a,b              	; width.
+       			ld		(txtwid),a       	; set width in working storage.
+				or		a
+				ret		z					; if width is zero then disable ticker
+
+       			dec		a               	; subtract one.
+       			cp		32               	; is it between 1 and 32?
+       			jr		nc,iscrl0        	; no, disable messages.
+
+       			ld		a,c              	; message number.
+       			ld		hl,msgdat        	; text messages.
+       			call	getwrd         		; find message start.
+       			ld		(txtini),hl      	; set initial text position.
+				ld		(txtpos),hl      	; set initial text position.
+
+				push	ix
+				ld		ix,scroll_view
+				ld		a,(chary)			; A = left position
+				ld		h,a
+				ld		l,16
+				mlt		hl					; convert to graphics co-ord
+				ld		(ix+0),l
+				ld		(ix+1),h
+				ld		a,(txtwid)			; A = width
+				ld		b,a
+				ld		c,16
+				mlt		bc					; BC = width * 16 (width in pixels)
+				add		hl,bc
+				dec		hl
+				ld		(ix+4),l
+				ld		(ix+5),h
+
+				ld		a,(charx)			; A = top position
+				ld		h,a
+				ld		l,16
+				mlt		hl					; HL = top in pixels
+				ld		(ix+6),l
+				ld		(ix+7),h
+
+				ld		a,l
+				ld		(scroll_txt_y),a
+				ld		a,h
+				ld		(scroll_txt_y+1),a
+
+				ld		bc,15
+				add		hl,bc
+				ld		(ix+2),l
+				ld		(ix+3),h
+
+				ld		a,16
+				ld		(scroll_offset),a
+				pop		ix
 				ret
+iscrl0:
+				xor		a					; set width to zero
+				ld		(txtwid),a			; to disable ticker scrolling
+				ret
+
+setprintmode:
+				ld		hl,prtmod
+				cp		(hl)
+				ret		z
+				ld		(hl),a
+				ld		hl,@single_height
+				or		a
+				jr		z,@select
+				ld		hl,@double_height
+@select:
+				ld		bc,7
+				jp		batchvdu
+
+@single_height:
+				db		23, 0, $95, 0				; Select font
+				dw		$B500						; buffer ID
+				db		0							; flags
+
+@double_height:
+				db		23, 0, $95, 0				; Select font
+				dw		$B501						; buffer ID
+				db		0							; flags
 
 setink:
 				and		15
@@ -2623,7 +3279,43 @@ definekey:
 				ret
 
 sound:
+				ld		hl,num_samples
+				cp		(hl)
+				ret		nc					; return if A >= num_samples
+
+				inc		a
+				neg
+				ld		(@sample),a
+
+				ld		a,(@channel)
+				inc		a
+				cp		8
+				jr		nz,@setchan
+				ld		a,4
+@setchan:
+				ld		(@channel),a
+				ld		(@channel2),a
+
+				ld		hl,@vdu_play_sample
+				ld		bc,@vdu_play_sample_end - @vdu_play_sample
+				rst.lil	$18
+				;call	batchvdu
+
 				ret
+
+@vdu_play_sample:
+				db		23, 0, $85
+@channel:		db		4
+				db		4
+@sample:		db		255
+
+				db		23, 0, $85
+@channel2:		db		4
+				db		0
+@volume:		db		127
+				dw		1234
+				dw		0
+@vdu_play_sample_end:
 
 beep:
 				and		127
@@ -2634,37 +3326,50 @@ beep:
 				ld		a,h
 				ld		(@dur),a
 
-;				ld		hl,@channel
-;				inc		(hl)
-;				ld		a,(hl)
-;				cp		4
-;				jr		nz,@nowrap
-;				ld		(hl),1
-@nowrap:
 				ld		hl,@vdu_sound
 				ld		bc,@vdu_sound_end - @vdu_sound
-				;rst.lil	$18
-				call	batchvdu
+				rst.lil	$18
 				ret
 @vdu_sound:
-				db		23,0,$85
-@channel:		db		1
+				db		23,0,$85			; audio command
+				db		1					; channel 1
 				db		0					; play sound
 				db		64					; volume 64 (out of 127)
-				dw		630					; frequency
+				dw		630					; frequency (start at 630 Hz)
 @dur:			dw		11					; duration
 @vdu_sound_end:
 
-@freqtab:
-				db		0,255,255,255,255,205,171,146,128,114,102,93,85,79,73,68
-				db		64,60,57,54,51,49,47,45,43,41,39,38,37,35,34,33
-				db		32,31,30,29,28,28,27,26,26,25,24,24,23,23,22,22
-				db		21,21,20,20,20,19,19,19,18,18,18,17,17,17,17,16
-				db		16,16,16,15,15,15,15,14,14,14,14,14,13,13,13,13
-				db		13,13,12,12,12,12,12,12,12,12,11,11,11,11,11,11
-				db		11,11,10,10,10,10,10,10,10,10,10,10,9,9,9,9
-				db		9,9,9,9,9,9,9,9,9,8,8,8,8,8,8,8
 
+crash:
+				ld		b,a					; save value in A
+
+				and		15					; bottom 4 bits are duration
+				ld		h,a
+				ld		l,40
+				mlt		hl					; convert to milliseconds
+
+				ld		a,l					; set duration
+				ld		(@dur),a
+				ld		a,h
+				ld		(@dur+1),a
+
+				ld		a,b					; restore original value of A
+				rra							; divide by two
+				and		120					; clear top bit and bottom 3 bits
+				ld		(@freq),a			; set the frequency (0 to 120)
+
+				ld		hl,@vdu_sound
+				ld		bc,@vdu_sound_end - @vdu_sound
+				rst.lil	$18
+				ret
+@vdu_sound:
+				db		23,0,$85			; audio command
+				db		0					; channel 0
+				db		0					; play sound
+				db		64					; volume 64 (out of 127)
+@freq:			dw		0					; frequency
+@dur:			dw		0					; duration
+@vdu_sound_end:
 
 ;============================================================================================================
 
@@ -2730,14 +3435,25 @@ vdu_setup_vdp:
 				db		23, 16, %01010001, 0		; disable text scrolling
 				db		23, 0, $A0, $FF,$FF, 2		; clear all command buffers
 
-				db		23, 0, $85, 0, 8
-				db		23, 0, $85, 1, 8
-				db		23, 0, $85, 2, 8
+				db		23, 0, $85, 0, 8			; enable channel 0
+				db		23, 0, $85, 1, 8			; enable channel 1
+				db		23, 0, $85, 2, 8			; enable channel 2
+				db		23, 0, $85, 3, 8			; enable channel 3
+				db		23, 0, $85, 4, 8			; enable channel 4
+				db		23, 0, $85, 5, 8			; enable channel 5
+				db		23, 0, $85, 6, 8			; enable channel 6
+				db		23, 0, $85, 7, 8			; enable channel 7
 
-				;db		23,0,$85,1,6,1				; ADSR envelope on channel 1
-				;dw		5,5							; 5ms attack, 5ms decay
-				;db		127							; sustain at 100% volume
-				;dw		10							; 10ms release
+				db		23, 0, $85, 0, 4, 5			; set channel 0 to VIC noise
+
+				db		23, 0, $85, 0, 13			; set channel 0 sample rate
+				dw		4000						; to 4000 Hz
+
+				db		23, 0, $85, 0, 6, 1			; ADSR envelope on channel 0
+				dw		10							; attack for 10ms
+				dw		0							; no decay
+				db		127							; sustain at target volume
+				dw		30							; release for 30ms
 
 				db		23,0,$85,1,7,1				; stepped frequency evelope on channel 1
 				db		2,5							; 2 phases, repeat+restrict
@@ -2750,72 +3466,124 @@ vdu_setup_vdp_end:
 
 ;============================================================================================================
 
+; A = 76543210 -> D = 77665544 E = 33221100
+expand_font:
+				ld		d,0
+				add		a,a
+				rl		d
+				rl		d
+				add		a,a
+				rl		d
+				rl		d
+				add		a,a
+				rl		d
+				rl		d
+				add		a,a
+				rl		d
+
+				ld		e,0
+				add		a,a
+				rl		e
+				rl		e
+				add		a,a
+				rl		e
+				rl		e
+				add		a,a
+				rl		e
+				rl		e
+				add		a,a
+				rl		e
+
+				ld		a,d
+				add		a,a
+				or		d
+				ld		d,a
+
+				ld		a,e
+				add		a,a
+				or		e
+				ld		e,a
+				ret
+
 load_font:
-				ld		de,font
-				ld		hl,@def_chars
-				ld		bc,96*8
+				ld		hl,font						; HL = original 8x8 font data
+				ld		ix,@def_chars				; IX = destination 16x16 font space
+				ld		bc,96*8						; BC = number of bytes to process (96 chars x 8 bytes per char)
 @loop:
-				push	bc
-				ld		b,0
-				ld		c,0
-				ld		a,(de)
-				inc		de
-
-				add		a,a
-				rl		b
-				rl		b
-				add		a,a
-				rl		b
-				rl		b
-				add		a,a
-				rl		b
-				rl		b
-				add		a,a
-				rl		b
-
-				add		a,a
-				rl		c
-				rl		c
-				add		a,a
-				rl		c
-				rl		c
-				add		a,a
-				rl		c
-				rl		c
-				add		a,a
-				rl		c
-
-				ld		a,b
-				add		a,a
-				or		b
-				ld		b,a
-
-				ld		a,c
-				add		a,a
-				or		c
-
-				ld		(hl),b
-				inc		hl
-				ld		(hl),a
-				inc		hl
-				ld		(hl),b
-				inc		hl
-				ld		(hl),a
-				inc		hl
-				pop		bc
+				ld		a,(hl)						; A = char byte to process
+				inc		hl							; HL++
+				call	expand_font
+				ld		(ix+0),d
+				ld		(ix+1),e
+				ld		(ix+2),d
+				ld		(ix+3),e
+				lea		ix,ix+4
 				dec		bc
 				ld		a,b
 				or		c
 				jr		nz,@loop
 
-				ld		hl,font_buffer_header
-				ld		bc,font_buffer_header_end - font_buffer_header
+; upload the single height font data to a buffer
+				ld		hl,@font_buffer_header
+				ld		bc,@font_buffer_header_end - @font_buffer_header
 				rst.lil	$18
 					
 				ld		hl,@font_data
 				ld		bc,256*32
 				rst.lil	$18
 
+; create the double height font data
+				ld		hl,font
+				ld		ix,@def_chars				; IX = destination 16x32 top
+				ld		iy,@bot_chars 				; IY = destination 16x32 bottom
+				ld		c,96						; C = number of chars to process
+@double:
+				ld		b,4
+@top:
+				ld		a,(hl)
+				inc		hl
+				call	expand_font
+				ld		(ix+0),d
+				ld		(ix+1),e
+				ld		(ix+2),d
+				ld		(ix+3),e
+				ld		(ix+4),d
+				ld		(ix+5),e
+				ld		(ix+6),d
+				ld		(ix+7),e
+				lea		ix,ix+8
+				djnz	@top
+
+				ld		b,4
+@bottom:
+				ld		a,(hl)
+				inc		hl
+				call	expand_font
+				ld		(iy+0),d
+				ld		(iy+1),e
+				ld		(iy+2),d
+				ld		(iy+3),e
+				ld		(iy+4),d
+				ld		(iy+5),e
+				ld		(iy+6),d
+				ld		(iy+7),e
+				lea		iy,iy+8
+				djnz	@bottom
+
+				dec		c
+				jr		nz,@double
+
+; upload the double height font data to a buffer
+
+				ld		hl,@dfont_buffer_header
+				ld		bc,@dfont_buffer_header_end - @dfont_buffer_header
+				rst.lil	$18
+					
+				ld		hl,@font_data
+				ld		bc,256*32
+				rst.lil	$18
+
+; create the fonts from the buffers
 				ld		hl,@vdu_create_font
 				ld		bc,@vdu_create_font_end - @vdu_create_font
 				rst.lil	$18
@@ -2824,32 +3592,60 @@ load_font:
 @font_data:
 				ds		32*32
 @def_chars:		ds		96*32
-				ds		128*32
+				ds		32*32
+@bot_chars:		ds		96*32
 
 @vdu_create_font:
-				db		23, 0, $95, 1
-				dw		$B500
-				db		16, 16, 16, 0
-				db		23, 0, $95, 0
-				dw		$B500
-				db		0
+				db		23, 0, $95, 1				; Create font from buffer
+				dw		$B500						; buffer ID
+				db		16, 16, 16, 0				; width, height, ascent, flags
+
+				db		23, 0, $95, 1				; Create font from buffer
+				dw		$B501						; buffer ID
+				db		16, 16, 16, 0				; width, height, ascent, flags
+
+				db		23, 0, $95, 0				; Select font
+				dw		$B500						; buffer ID
+				db		0							; flags
 @vdu_create_font_end:
 
-font_buffer_header:
+@font_buffer_header:
 				db		23, 0, $A0					; buffered command API code
-font_buffer_id1:
-				dw		$B500						; 16bit buffer ID $B1xx
+				dw		$B500						; 16bit buffer ID
 				db		2							; command 2 = clear buffer
 
 				db		23, 0, $A0					; buffered command API code
-font_buffer_id2:
-				dw		$B500						; 16bit buffer ID $xxxx
+				dw		$B500						; 16bit buffer ID
 				db		0							; command 0 = write block to buffer
-font_buffer_len:
 				dw		256*32						; 16bit buffer length
-font_buffer_header_end:
+@font_buffer_header_end:
+
+@dfont_buffer_header:
+				db		23, 0, $A0					; buffered command API code
+				dw		$B501						; 16bit buffer ID
+				db		2							; command 2 = clear buffer
+
+				db		23, 0, $A0					; buffered command API code
+				dw		$B501						; 16bit buffer ID
+				db		0							; command 0 = write block to buffer
+				dw		256*32						; 16bit buffer length
+@dfont_buffer_header_end:
+
 
 ;============================================================================================================
+
+xor_block:
+				push	af
+				ld		hl,vdu_gcol_xor
+				ld		bc,3
+				call	batchvdu
+				pop		af
+
+				call	draw_block
+
+				ld		hl,vdu_gcol_paint
+				ld		bc,3
+				jp		batchvdu
 
 draw_block:
 				ld		hl,$B100
@@ -2864,6 +3660,7 @@ draw_block:
 				mlt		de					; DE = dispx * 16
 				call	draw_bitmap
 				ret
+
 
 ;============================================================================================================
 
@@ -2896,7 +3693,6 @@ draw_object:
 					ld		hl,vdu_gcol_paint
 					ld		bc,3
 					call	batchvdu
-@done:
 					pop		af
 					ret
 
@@ -3084,6 +3880,25 @@ bitmap_buffer_h:	db		0,0							; 16bit height
 bitmap_format:		db		0							; bitmap format
 bitmap_create_end:
 
+;============================================================================================================
+
+load_samples:
+					ld		a,(num_samples)				; A = number of sound files defined
+					or		a
+					ret		z							; return if no sound files
+
+					ld		b,a
+					ld		ix,sample_table
+@loop:
+					push	bc
+					ld		hl,(ix+0)					; HL = address of sound upload VDUs
+					ld		bc,(ix+3)					; BC = number of bytest to send
+					lea		ix,ix+6
+					rst.lil	$18							; send bytes to VDP
+
+					pop		bc
+					djnz	@loop
+					ret
 
 ;============================================================================================================
 
@@ -3277,13 +4092,15 @@ fiftyhz_timer:
 
 gfx_present:
 					push	af
+					ld		a,(gfxbatch)
+					or		a
+					jr		z,@nobatch
+
 					push	bc
 					push	de
 					push	hl
 					push	ix
-					ld		a,(gfxbatch)
-					or		a
-					jr		z,@done
+
 					ld		bc,(vdu_buf_count)
 					ld		a,b
 					or		c
@@ -3295,6 +4112,7 @@ gfx_present:
 					pop		hl
 					pop		de
 					pop		bc
+@nobatch:
 					pop		af
 					ret
 
@@ -3486,6 +4304,16 @@ batchvdu:
 					push	hl
 					ld		hl,(vdu_buf_count)
 					add		hl,bc
+
+; check for buffer full
+					ex		de,hl
+					ld		hl,vdu_buffer_end - vdu_buffer		; HL = size of buffer
+					or		a
+					sbc		hl,de
+					ex		de,hl
+					jr		c,@bufferfull
+
+; room in the buffer for these bytes
 					ld		(vdu_buf_count),hl
 					pop		hl
 					ld		de,(vdu_buf_ptr)
@@ -3494,6 +4322,13 @@ batchvdu:
 					pop		de
 					ret
 
+; buffer is full so send it to the VDP
+@bufferfull:
+					pop		hl
+					pop		de
+					call	gfx_present
+					jr		batchvdu
+
 gfxbatch:			db		0
 vdu_buf_count:		dl		0
 vdu_buf_ptr:		dl		0
@@ -3501,6 +4336,8 @@ vdu_call_buffer:	db		23, 0, $A0, 1,0, 1,  23, 0, $A0, 1,0, 2
 vdu_write_buffer:	db		23, 0, $A0, 1,0, 0
 vdu_write_buf_len:	dw		0
 vdu_buffer:			ds		16384
+vdu_buffer_end:
+					ds		10		; padding just in case
 
 ;============================================================================================================
 
@@ -3776,8 +4613,9 @@ comcnt:			db 0					; compression counter.
 
 sprtab:
 			ds	NUMSPR * TABSIZ 
-ssprit:		db 255,255,255,255,255,255,255,0,192,120,0,0,0,255,255,255,255,255,15
+ssprit:		db	255,255,255,255,255,255,255,0,192,120,0,0,0,255,255,255,255,255,15,15
 
+SHRAPN:		ds NUMSHR*SHRSIZ
 
 MAP:		ds 24*32                ; main attributes map. Stores tile attributes
 

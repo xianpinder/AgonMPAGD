@@ -3,7 +3,7 @@
 rem Compile AGD file
  copy AGDsource\%1.agd AGD
  cd AGD
- CompilerAgon %1 -a
+ CompilerAgon %*
  copy %1.asm ..\ez80asm\
  del %1.agd
  del %1.asm
