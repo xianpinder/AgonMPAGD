@@ -1,6 +1,6 @@
 # Agon Build Suite for MPAGD
 ## About
-The Agon Build Suite adds support for the Agon Light/Console 8 computer to the Multi-Platform Arcade Designer. It is based on the ZX Spectrum engine and is designed to allow Spectrum MPAGD games to be ported to the Agon with minimal changes.
+The Agon Build Suite adds support for the Agon Light/Console 8 computer to the Multi-Platform Arcade Game Designer. It is based on the ZX Spectrum engine and is designed to allow Spectrum MPAGD games to be ported to the Agon with minimal changes.
 
 The Agon Build Suite includes a new GUI (AgonAGD.exe) which is a re-implemented version of the MPAGD WinAGD.exe application. It includes support for the Agon in its list of machines plus additional features and bug fixes.
 
