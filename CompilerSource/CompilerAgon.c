@@ -259,6 +259,9 @@ enum
 	CMP_DEFINEJUMP,
 	CMP_DEFINECONTROLS,
 	CMP_DEFSOUND,
+	CMP_DEFOBJECT,
+	CMP_DEFBLOCK,
+	CMP_DEFSPRITE,
 
 	CON_LEFT,
 	CON_RIGHT,
@@ -723,6 +726,9 @@ const char *keywrd =
 	"DEFINEJUMP."		// define jump table.
 	"DEFINECONTROLS."	// define key table.
 	"DEFSOUND."			// define sound effect.
+	"DEFOBJECT."		// define object.
+	"DEFBLOCK."			// define block.
+	"DEFSPRITE."		// define sprite.
 
 	/* Constants. */
 	"LEFT."				// left constant (keys).
@@ -1154,7 +1160,7 @@ void CreateBlocks(void)
 {
 	int nCounter = 0;
 	char cType[256];
-	short int nAttr[256];
+	//short int nAttr[256];
 	char txt[100];
 
 	// Set up source address.
@@ -1170,6 +1176,7 @@ void CreateBlocks(void)
 	do
 	{
 		cType[nCounter] = *cSrc++;				// store type in array
+		//nAttr[nCounter] = *cSrc++;				// store attribute in array
 
 		sprintf (txt, "\nblock%d:", nCounter);
 		WriteText(txt);
@@ -1178,42 +1185,20 @@ void CreateBlocks(void)
 		WriteText("\n       dw 16,16");			// 16x16 size
 		WriteText("\n       dw 256");			// 16 * 16
 
-		int attrib = cSrc[8];
-		int bright = (attrib & 64) != 0;
-		int paper = (attrib >> 3) & 7;
-		int ink = attrib & 7;
-		if (bright)
+		// write out 16x16 colour bitmap
+		for (int row = 0; row < 16; row++)
 		{
-			paper += 8;
-			ink += 8;
-		}
-		paper = getAgonColour(paper);
-		ink = getAgonColour(ink);
-
-		// we need to convert a 8x8 monochrome bitmap into a 16x16 colour bitmap
-		for (int row = 0; row < 8; row++)
-		{
-			int zxbyte = *cSrc++;
-			for (int i = 0; i < 2; i++)
+			WriteText("\n       db ");						/* start of text message */
+			for (int col = 0; col < 16; col++)
 			{
-				int bw = zxbyte;
-				WriteText("\n       db ");						/* start of text message */
-				for (int col = 0; col < 8; col++)
-				{
-					int bit = bw >> 7;
-					int agcol = bit == 0 ? paper : ink;
-					bw = (bw << 1) & 255;
-					WriteNumber(agcol);
-					WriteText(",");
-					WriteNumber(agcol);							/* write byte of data */
-					if (col != 7)
-						WriteText(",");						/* put a comma */
-				}
+				unsigned char agcol = getAgonColour(*cSrc++);
+				WriteNumber(agcol);
+				if (col != 15)
+					WriteText(",");						/* put a comma */
 			}
 		}
 		WriteText("\n");						// blank line separator
 
-		nAttr[nCounter] = *cSrc++;						/* store attribute in array */
 		nCounter++;
 	} while ((cSrc - cBuff) < lSize);
 
@@ -1272,33 +1257,16 @@ void CreateSprites(void)
 			WriteText("\n       dw 32,32");			// 32x32 size
 			WriteText("\n       dw 1024");			// 32 * 32
 
-			int paper = 0;		// transparent black
-			int ink = 255;		// solid white
-
-			// we need to convert a 16x16 monochrome bitmap into a 32x32 colour bitmap
-			for (int row = 0; row < 16; row++)
+			// write out 32x32 colour bitmap
+			for (int row = 0; row < 32; row++)
 			{
-				int zxbyte[2];
-				zxbyte[0] = *cSrc++;
-				zxbyte[1] = *cSrc++;
-				for (int i = 0; i < 2; i++)
+				WriteText("\n       db ");
+				for (int col = 0; col < 32; col++)
 				{
-					WriteText("\n       db ");
-					for (int byte = 0; byte < 2; byte++)
-					{
-						int bw = zxbyte[byte];
-						for (int col = 0; col < 8; col++)
-						{
-							int bit = bw >> 7;
-							int agcol = bit == 0 ? paper : ink;
-							bw = (bw << 1) & 255;
-							WriteNumber(agcol);
-							WriteText(",");
-							WriteNumber(agcol);
-							if ((byte * 8) + col != 15)
-								WriteText(",");	
-						}
-					}
+					int pixel = *cSrc++;
+					WriteNumber (pixel == 0 ? 0 : getAgonColour(pixel));
+					if (col != 31)
+						WriteText(",");
 				}
 			}
 			WriteText("\n");						// blank line separator
@@ -1606,7 +1574,7 @@ void CreateObjects( void )
 		int cScrn = *cSrc++;								/* get screen. */
 		int cX = *cSrc++;									/* get x. */
 		int cY = *cSrc++;									/* get y. */
-		cSrc += 32;
+		cSrc += 1024;
 		WriteInstruction( "db " );
 		WriteNumber(nCount);
 		WriteText( "," );
@@ -1628,8 +1596,8 @@ void CreateObjects( void )
 
 	for (int nCount = 0; nCount < nObjects; nCount++)
 	{
-		int cAttr = *cSrc++;								// get attribute
-		cSrc += 3;											// skip screen, y, x
+		//int cAttr = *cSrc++;								// get attribute
+		cSrc += 4;											// skip attribute, screen, y, x
 
 		sprintf(txt, "\nobjbmp%d:", nCount);
 		WriteText(txt);
@@ -1638,46 +1606,20 @@ void CreateObjects( void )
 		WriteText("\n       dw 32,32");			// 32x32 size
 		WriteText("\n       dw 1024");			// 32 * 32
 
-		int attrib = cAttr;
-		int bright = (attrib & 64) != 0;
-		int paper = (attrib >> 3) & 7;
-		int ink = attrib & 7;
-		if (bright)
+		// write out 32x32 colour bitmap
+		for (int row = 0; row < 32; row++)
 		{
-			paper += 8;
-			ink += 8;
-		}
-		paper = getAgonColour(paper);
-		ink = getAgonColour(ink);
-
-		// we need to convert a 16x16 monochrome bitmap into a 32x32 colour bitmap
-		for (int row = 0; row < 16; row++)
-		{
-			int zxbyte[2];
-			zxbyte[0] = *cSrc++;
-			zxbyte[1] = *cSrc++;
-			for (int i = 0; i < 2; i++)
+			WriteText("\n       db ");
+			for (int col = 0; col < 32; col++)
 			{
-				WriteText("\n       db ");						/* start of text message */
-				for (int byte = 0; byte < 2; byte++)
-				{
-					int bw = zxbyte[byte];
-					for (int col = 0; col < 8; col++)
-					{
-						int bit = bw >> 7;
-						int agcol = bit == 0 ? paper : ink;
-						bw = (bw << 1) & 255;
-						WriteNumber(agcol);
-						WriteText(",");
-						WriteNumber(agcol);							/* write byte of data */
-						if ((byte * 8) + col != 15)
-							WriteText(",");						/* put a comma */
-					}
-				}
+				WriteNumber (getAgonColour(*cSrc++));
+				if (col != 31)
+					WriteText(",");
 			}
 		}
-		WriteText("\n");						// blank line separator
 	}
+
+	WriteText("\n");						// blank line separator
 
 	// Now do the object bitmap pointers
 	WriteText("\nobjbmpptrs:");
@@ -3887,11 +3829,11 @@ void CR_Event( void )
 	}
 }
 
-void CR_DefineBlock( void )
+void CR_DefBlock (void)
 {
 	unsigned short int nArg;
 	char cChar;
-	short int nDatum = 0;
+	unsigned char block_data[257];
 
 	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
 	{
@@ -3899,23 +3841,99 @@ void CR_DefineBlock( void )
 		nEvent = -1;
 	}
 
-	do
+	nArg = NextKeyword();
+	if ( nArg != INS_NUM )
+	{
+		Error( "Missing data for DEFBLOCK" );
+		return;
+	}
+
+	cChar = ( char )GetNum( 8 );
+	if (cChar != 1)
+	{
+		Error( "Unknown type number for DEFBLOCK" );
+		return;
+	}
+
+	for (int nDatum = 0; nDatum < 257; nDatum++)
 	{
 		nArg = NextKeyword();
 		if ( nArg == INS_NUM )
 		{
-			nArg = GetNum( 8 );
-			cChar = ( char )nArg;
-			fwrite( &cChar, 1, 1, pWorkBlk );				/* write character to blocks workfile. */
-			nDatum++;
+			block_data[nDatum] = (unsigned char)GetNum(8);
+		}
+		else
+		{
+			Error( "Missing data for DEFBLOCK" );
+			return;
+		}
+	}
+
+	fwrite( &block_data, 1, sizeof (block_data), pWorkBlk );
+}
+
+
+void CR_DefineBlock( void )
+{
+	unsigned short int nArg;
+	char cChar;
+	unsigned char zx_data[10];
+	unsigned char block_data[257];
+	int data_index = 0;
+
+	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
+	{
+		EndEvent();											/* always put a ret at the end. */
+		nEvent = -1;
+	}
+
+	for (int nDatum = 0; nDatum < 10; nDatum++)
+	{
+		nArg = NextKeyword();
+		if ( nArg == INS_NUM )
+		{
+			zx_data[nDatum] = (unsigned char)GetNum(8);
 		}
 		else
 		{
 			Error( "Missing data for DEFINEBLOCK" );
-			nDatum = 10;
+			return;
 		}
 	}
-	while ( nDatum < 10 );
+
+	block_data[data_index++] = zx_data[0]; // block type
+	//block_data[data_index++] = zx_data[9]; // block attribute
+
+	unsigned char *chptr = &zx_data[1];
+	unsigned char attrib = zx_data[9];
+	int bright = (attrib & 64) != 0;
+	unsigned char paper = (attrib >> 3) & 7;
+	unsigned char ink = attrib & 7;
+	if (bright)
+	{
+		paper += 8;
+		ink += 8;
+	}
+
+	for (int i = 0; i < 8; i++)
+	{
+		int zxbyte = *chptr++;
+
+		for (int j = 0; j < 2; j++)
+		{
+		    int bw = zxbyte;
+			for (int col = 0; col < 8; col++)
+			{
+				int bit = bw >> 7;
+				int agcol = bit == 0 ? paper : ink;
+				block_data[data_index++] = agcol;
+				block_data[data_index++] = agcol;
+				bw = (bw << 1) & 255;
+			}
+		}
+	}
+
+	fwrite( &block_data, 1, sizeof (block_data), pWorkBlk );
 }
 
 void CR_DefineWindow( void )
@@ -4006,12 +4024,76 @@ void CR_DefineWindow( void )
 	}
 }
 
+void CR_DefSprite (void)
+{
+	unsigned short int nArg;
+	unsigned char cChar;
+	short int nFrames = 0;
+	unsigned char spr_data[1024];	// 32 * 32
+
+	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
+	{
+		EndEvent();											/* always put a ret at the end. */
+		nEvent = -1;
+	}
+
+	nArg = NextKeyword();
+	if ( nArg != INS_NUM )
+	{
+		Error( "Missing data for DEFSPRITE" );
+		return;
+	}
+
+	cChar = ( char )GetNum( 8 );
+	if (cChar != 1)
+	{
+		Error( "Unkown type number for DEFSPRITE" );
+		return;
+	}
+
+	nArg = NextKeyword();
+	if ( nArg == INS_NUM )
+	{
+		cChar = GetNum( 8 );
+		fwrite( &cChar, 1, 1, pWorkSpr );					/* write number of frames to sprites workfile. */
+	}
+	else
+	{
+		Error( "Number of frames undefined for DEFSPRITE" );
+		return;
+	}
+
+	nFrames = cChar;
+
+	while ( nFrames-- > 0 )
+	{
+		for (int i = 0; i < 1024; i++)
+		{
+			nArg = NextKeyword();
+			if ( nArg != INS_NUM )
+			{
+				Error( "Missing data for DEFSPRITE" );
+				return;
+			}
+
+			spr_data[i] = (unsigned char) GetNum( 8 );
+		}
+
+		fwrite (&spr_data, 1, sizeof(spr_data), pWorkSpr);
+	}
+}
+
+
 void CR_DefineSprite( void )
 {
 	unsigned short int nArg;
-	char cChar;
+	unsigned char cChar;
 	short int nDatum = 0;
 	short int nFrames = 0;
+	unsigned char spr_data[1024];	// 32 * 32
+	int data_index = 0;
+	int zxbyte[2];
+	unsigned char zx_data[32];
 
 	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
 	{
@@ -4022,34 +4104,57 @@ void CR_DefineSprite( void )
 	nArg = NextKeyword();
 	if ( nArg == INS_NUM )
 	{
-		nFrames = GetNum( 8 );
-		fwrite( &nFrames, 1, 1, pWorkSpr );						/* write character to sprites workfile. */
+		cChar = GetNum( 8 );
+		fwrite( &cChar, 1, 1, pWorkSpr );					/* write number of frames to sprites workfile. */
 	}
 	else
 	{
 		Error( "Number of frames undefined for DEFINESPRITE" );
+		return;
 	}
+
+	nFrames = cChar;
 
 	while ( nFrames-- > 0 )
 	{
-		nDatum = 0;
-		do
+		for (nDatum = 0; nDatum < 32; nDatum++)
 		{
 			nArg = NextKeyword();
 			if ( nArg == INS_NUM )
 			{
-				nArg = GetNum( 8 );
-				cChar = ( char )nArg;
-				fwrite( &cChar, 1, 1, pWorkSpr );				/* write character to sprites workfile. */
-				nDatum++;
+				zx_data[nDatum] = (unsigned char) GetNum(8);
 			}
 			else
 			{
 				Error( "Missing data for DEFINESPRITE" );
-				nDatum = 32;
+				return;
 			}
 		}
-		while ( nDatum < 32 );
+
+		data_index = 0;
+		for (int i = 0; i < 16; i++)
+		{
+			zxbyte[0] = zx_data[i*2];
+			zxbyte[1] = zx_data[i*2 + 1];
+
+			for (int j = 0; j < 2; j++)
+			{
+				for (int byte = 0; byte < 2; byte++)
+				{
+					int bw = zxbyte[byte];
+					for (int col = 0; col < 8; col++)
+					{
+						int bit = bw >> 7;
+						int agcol = bit == 0 ? 0 : 15;
+						spr_data[data_index++] = agcol;
+						spr_data[data_index++] = agcol;
+						bw = (bw << 1) & 255;
+					}
+				}
+			}
+		}
+
+		fwrite (&spr_data, 1, sizeof(spr_data), pWorkSpr);
 	}
 }
 
@@ -4125,11 +4230,13 @@ void CR_SpritePosition( void )
 	nPositions++;
 }
 
-void CR_DefineObject( void )
+
+void CR_DefObject (void)
 {
 	unsigned short int nArg;
-	short int nDatum = 0;
 	unsigned char cChar;
+	unsigned char obj_data[1028];	// 4 + 32 * 32
+	int data_index = 0;
 
 	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
 	{
@@ -4137,22 +4244,137 @@ void CR_DefineObject( void )
 		nEvent = -1;
 	}
 
-	do
+	nArg = NextKeyword();
+	if ( nArg != INS_NUM )
+	{
+		Error( "Missing data for DEFOBJECT" );
+		return;
+	}
+
+	cChar = ( char )GetNum( 8 );
+	if (cChar != 1)
+	{
+		Error( "Unkown type number for DEFOBJECT" );
+		return;
+	}
+
+	obj_data[data_index++] = 71;	// dummy colour attribute
+
+	for (int i = 0; i < 3; i++)
 	{
 		nArg = NextKeyword();
-		if ( nArg == INS_NUM )
+		if ( nArg != INS_NUM )
 		{
-			cChar = ( char )GetNum( 8 );
-			fwrite( &cChar, 1, 1, pWorkObj );					/* write character to objects workfile. */
-			nDatum++;
+			Error( "Missing data for DEFOBJECT" );
+			return;
 		}
-		else
+
+		cChar = ( char )GetNum( 8 );
+		obj_data[data_index++] = cChar;
+	}
+
+	for (int i = 0; i < 1024; i++)
+	{
+		nArg = NextKeyword();
+		if ( nArg != INS_NUM )
+		{
+			Error( "Missing data for DEFOBJECT" );
+			return;
+		}
+
+		cChar = ( char )GetNum( 8 );
+		obj_data[data_index++] = cChar;
+	}
+
+	fwrite( &obj_data, 1, 1028, pWorkObj );					/* write character to objects workfile. */
+
+	nObjects++;
+}
+
+void CR_DefineObject( void )
+{
+	unsigned short int nArg;
+	//short int nDatum = 0;
+	unsigned char cChar;
+	unsigned char obj_data[1028];	// 4 + 32 * 32
+	int data_index = 0;
+	int attrib = 0;
+	int zxbyte[2];
+
+	if ( nEvent >= 0 && nEvent < NUM_EVENTS )
+	{
+		EndEvent();												/* always put a ret at the end. */
+		nEvent = -1;
+	}
+
+	// Write out the first four bytes - colour attribute, screen, y, x
+	for (int i = 0; i < 4; i++)
+	{
+		nArg = NextKeyword();
+		if ( nArg != INS_NUM )
 		{
 			Error( "Missing data for DEFINEOBJECT" );
-			nDatum = 36;
+			return;
+		}
+
+		cChar = ( char )GetNum( 8 );
+		obj_data[data_index++] = cChar;
+
+		if (i == 0)
+			attrib = cChar;
+		//fwrite( &cChar, 1, 1, pWorkObj );					/* write character to objects workfile. */
+	}
+
+	int bright = (attrib & 64) != 0;
+	int paper = (attrib >> 3) & 7;
+	int ink = attrib & 7;
+	if (bright)
+	{
+		paper += 8;
+		ink += 8;
+	}
+	//paper = getAgonColour(paper);
+	//ink = getAgonColour(ink);
+
+	// Next 32 bytes are the object bitmap
+	for (int i = 0; i < 16; i++)
+	{
+		nArg = NextKeyword();
+		if ( nArg != INS_NUM )
+		{
+			Error( "Missing data for DEFINEOBJECT" );
+			return;
+		}
+
+		zxbyte[0] = (char)GetNum( 8 );
+
+		nArg = NextKeyword();
+		if ( nArg != INS_NUM )
+		{
+			Error( "Missing data for DEFINEOBJECT" );
+			return;
+		}
+
+		zxbyte[1] =  (char)GetNum( 8 );
+
+		for (int i = 0; i < 2; i++)
+		{
+			for (int byte = 0; byte < 2; byte++)
+			{
+				int bw = zxbyte[byte];
+				for (int col = 0; col < 8; col++)
+				{
+					int bit = bw >> 7;
+					int agcol = bit == 0 ? paper : ink;
+					obj_data[data_index++] = agcol;
+					obj_data[data_index++] = agcol;
+					bw = (bw << 1) & 255;
+				}
+			}
 		}
 	}
-	while ( nDatum < 36 );
+
+	fwrite( &obj_data, 1, 1028, pWorkObj );					/* write character to objects workfile. */
 
 	nObjects++;
 }
@@ -5524,11 +5746,17 @@ void Compile( unsigned short int nInstruction )
 		case CMP_DEFINEBLOCK:
 			CR_DefineBlock();
 			break;
+		case CMP_DEFBLOCK:
+			CR_DefBlock();
+			break;
 		case CMP_DEFINEWINDOW:
 			CR_DefineWindow();
 			break;
 		case CMP_DEFINESPRITE:
 			CR_DefineSprite();
+			break;
+		case CMP_DEFSPRITE:
+			CR_DefSprite();
 			break;
 		case CMP_DEFINESCREEN:
 			CR_DefineScreen();
@@ -5538,6 +5766,9 @@ void Compile( unsigned short int nInstruction )
 			break;
 		case CMP_DEFINEOBJECT:
 			CR_DefineObject();
+			break;
+		case CMP_DEFOBJECT:
+			CR_DefObject();
 			break;
 		case CMP_MAP:
 			CR_Map();
@@ -5677,7 +5908,7 @@ int main (int argc, const char* argv[])
 
 	puts( "AGD Compiler for Agon version 0.7.10" );
 	puts( "(C) Jonathan Cauldwell May 2020" );
-	puts( "AgonLight/Console8 port v0.4 by Christian Pinder" );
+	puts( "AgonLight/Console8 port v0.5 by Christian Pinder" );
 
 	if ( argc >= 2 && argc <= 6 )
 	{

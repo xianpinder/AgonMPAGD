@@ -3719,6 +3719,11 @@ draw_sprite:
 
 					push	ix
 					ld		ix,@vdu_draw_bitmap
+					ld		a,(@sprite_colour)
+					cp		143						; 128+15
+					jr		nz,@useink
+					ld		ix,@vdu_colour_spr
+@useink:
 					ld		(ix+6),l
 					ld		(ix+7),h
 					ld		(ix+10),c
@@ -3739,6 +3744,14 @@ draw_sprite:
 					db		25, $EF, 0, 0, 0, 0
 					db		18, 0, 128
 @vdu_draw_bitmap_end:
+
+@vdu_colour_spr:
+					db		18, 3, 15
+					db 		23, 27, $20, 0, 0
+					db		25, $ED, 0, 0, 0, 0
+					db		18, 0, 15
+
+
 
 
 ;============================================================================================================
